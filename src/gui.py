@@ -23,8 +23,12 @@ DEFAULT_PRACTICAS = ["250101", "250102"]
 
 def cargar_feriados():
     if os.path.exists(FERIADOS_FILE):
-        with open(FERIADOS_FILE, "r") as f:
-            return json.load(f)
+        try:
+            with open(FERIADOS_FILE, "r") as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+        except (json.JSONDecodeError, OSError):
+            return []
     return []
 
 def guardar_feriados(feriados):
@@ -399,17 +403,12 @@ class AgregarPacienteDialog(ctk.CTkToplevel):
 
         practicas = [r[1].get().strip() for r in self._practica_rows if r[1].get().strip()]
 
-        if not all([beneficio, parentesco, diagnostico]) or not practicas:
-            messagebox.showerror("Error", "Completá todos los campos e ingresá al menos una práctica.", parent=self)
+        if sesiones < 1:
+            messagebox.showerror("Error", "La cantidad de sesiones debe ser al menos 1.", parent=self)
             return
 
-        fechas = generar_fechas(fecha, sesiones, cargar_feriados())
-        if fechas and fechas[-1] > datetime.today().date():
-            messagebox.showerror(
-                "Fechas inválidas",
-                f"La última sesión caería el {fechas[-1].strftime('%d/%m/%Y')}, "
-                f"que supera la fecha de hoy. PAMI no permite cargar fechas futuras.",
-                parent=self)
+        if not all([beneficio, parentesco, diagnostico]) or not practicas:
+            messagebox.showerror("Error", "Completá todos los campos e ingresá al menos una práctica.", parent=self)
             return
 
         self.parent.pacientes.append({
@@ -506,17 +505,12 @@ class EditarPacienteDialog(ctk.CTkToplevel):
 
         practicas = [r[1].get().strip() for r in self._practica_rows if r[1].get().strip()]
 
-        if not all([beneficio, parentesco, diagnostico]) or not practicas:
-            messagebox.showerror("Error", "Completá todos los campos e ingresá al menos una práctica.", parent=self)
+        if sesiones < 1:
+            messagebox.showerror("Error", "La cantidad de sesiones debe ser al menos 1.", parent=self)
             return
 
-        fechas = generar_fechas(fecha, sesiones, cargar_feriados())
-        if fechas and fechas[-1] > datetime.today().date():
-            messagebox.showerror(
-                "Fechas inválidas",
-                f"La última sesión caería el {fechas[-1].strftime('%d/%m/%Y')}, "
-                f"que supera la fecha de hoy. PAMI no permite cargar fechas futuras.",
-                parent=self)
+        if not all([beneficio, parentesco, diagnostico]) or not practicas:
+            messagebox.showerror("Error", "Completá todos los campos e ingresá al menos una práctica.", parent=self)
             return
 
         self.parent.pacientes[self.idx] = {
@@ -528,6 +522,52 @@ class EditarPacienteDialog(ctk.CTkToplevel):
             "practicas":    practicas,
         }
         self.parent.actualizar_tabla()
+        self.destroy()
+
+# ── Diálogo: Fechas Futuras ───────────────────────────────────────────────────
+
+class FechasFuturasDialog(ctk.CTkToplevel):
+    def __init__(self, parent, por_beneficio, max_fecha):
+        super().__init__(parent)
+        self.result = False
+        self.title("Sesiones con fecha futura")
+        self.geometry("440x360")
+        self.resizable(False, True)
+        self.grab_set()
+
+        total = sum(len(v) for v in por_beneficio.values())
+
+        ctk.CTkLabel(self,
+                     text=f"{total} sesión(es) de {len(por_beneficio)} paciente(s) tienen fecha futura.",
+                     wraplength=400, font=ctk.CTkFont(weight="bold")).pack(pady=(18, 4), padx=20)
+
+        ctk.CTkLabel(self,
+                     text=f"Podrás procesar el Excel completo a partir del {max_fecha.strftime('%d/%m/%Y')}.",
+                     wraplength=400, text_color="#e67e22").pack(pady=(0, 10), padx=20)
+
+        lista = ctk.CTkScrollableFrame(self, height=140)
+        lista.pack(fill="x", padx=20, pady=(0, 8))
+        for ben, fechas in por_beneficio.items():
+            texto = (f"• Beneficio {ben}: {len(fechas)} sesión(es),"
+                     f" hasta el {max(fechas).strftime('%d/%m/%Y')}")
+            ctk.CTkLabel(lista, text=texto, anchor="w").pack(fill="x", padx=6, pady=2)
+
+        ctk.CTkLabel(self,
+                     text="Estas sesiones se omitirán automáticamente al ejecutar el bot.",
+                     wraplength=400, text_color="gray60",
+                     font=ctk.CTkFont(size=11)).pack(pady=(0, 14), padx=20)
+
+        frame_btns = ctk.CTkFrame(self, fg_color="transparent")
+        frame_btns.pack(pady=(0, 18))
+        ctk.CTkButton(frame_btns, text="Generar de todas formas",
+                      command=self._confirmar).pack(side="left", padx=8)
+        ctk.CTkButton(frame_btns, text="Cancelar", fg_color="#c0392b",
+                      hover_color="#922b21", command=self.destroy).pack(side="left", padx=8)
+
+        self.wait_window()
+
+    def _confirmar(self):
+        self.result = True
         self.destroy()
 
 # ── Ventana Principal ─────────────────────────────────────────────────────────
@@ -584,8 +624,9 @@ class App(ctk.CTk):
         frame_acciones.grid(row=5, column=0, pady=5)
         ctk.CTkButton(frame_acciones, text="Generar Excel",
                       command=self.generar_excel).pack(side="left", padx=8)
-        ctk.CTkButton(frame_acciones, text="Ejecutar Bot", fg_color="#27ae60",
-                      hover_color="#1e8449", command=self.ejecutar_bot).pack(side="left", padx=8)
+        self.btn_ejecutar = ctk.CTkButton(frame_acciones, text="Ejecutar Bot", fg_color="#27ae60",
+                      hover_color="#1e8449", command=self.ejecutar_bot)
+        self.btn_ejecutar.pack(side="left", padx=8)
 
         # ── Modo prueba
         frame_prueba = ctk.CTkFrame(self, fg_color="transparent")
@@ -668,10 +709,16 @@ class App(ctk.CTk):
             return
 
         feriados = cargar_feriados()
+        hoy = datetime.today().date()
         rows = []
+        por_beneficio = {}
+
         for p in self.pacientes:
             fechas = generar_fechas(p["fecha_inicio"], p["sesiones"], feriados)
             practicas = p.get("practicas", DEFAULT_PRACTICAS)
+            futuras = [f for f in fechas if f > hoy]
+            if futuras:
+                por_beneficio[p["beneficio"]] = futuras
             for fecha in fechas:
                 fila = {
                     "Beneficio":       p["beneficio"],
@@ -683,9 +730,20 @@ class App(ctk.CTk):
                     fila[f"Cod_Practica{j}"] = cod
                 rows.append(fila)
 
+        if por_beneficio:
+            max_fecha = max(f for fechas in por_beneficio.values() for f in fechas)
+            dlg = FechasFuturasDialog(self, por_beneficio, max_fecha)
+            if not dlg.result:
+                return
+
         df = pd.DataFrame(rows)
         df.to_excel("pacientes.xlsx", index=False)
-        self.log_append(f"Excel generado: {len(rows)} filas para {len(self.pacientes)} paciente(s).\n")
+
+        n_futuras = sum(len(v) for v in por_beneficio.values())
+        msg = f"Excel generado: {len(rows)} filas para {len(self.pacientes)} paciente(s).\n"
+        if por_beneficio:
+            msg += f"⚠ {n_futuras} sesión(es) futuras — procesables a partir del {max_fecha.strftime('%d/%m/%Y')}.\n"
+        self.log_append(msg)
         messagebox.showinfo("Listo", "pacientes.xlsx generado correctamente.")
 
     def _update_progress(self, actual, total):
@@ -700,6 +758,7 @@ class App(ctk.CTk):
             messagebox.showwarning("Aviso", "Generá el Excel primero.")
             return
 
+        self.btn_ejecutar.configure(state="disabled")
         self.progress_bar.set(0)
         self.progress_label.configure(text="")
         modo = " [MODO PRUEBA]" if self.dry_run_var.get() else ""
@@ -718,7 +777,7 @@ class App(ctk.CTk):
                 env=env
             )
             for linea in proc.stdout:
-                self.log_append(linea)
+                self.after(0, lambda l=linea: self.log_append(l))
                 m = re.search(r"Fila (\d+) de (\d+)", linea)
                 if m:
                     actual, total = int(m.group(1)), int(m.group(2))
@@ -726,7 +785,8 @@ class App(ctk.CTk):
             proc.wait()
             self.after(0, lambda: self.progress_bar.set(1.0))
             self.after(0, lambda: self.progress_label.configure(text="Completado"))
-            self.log_append("Bot finalizado.\n")
+            self.after(0, lambda: self.log_append("Bot finalizado.\n"))
+            self.after(0, lambda: self.btn_ejecutar.configure(state="normal"))
 
         threading.Thread(target=correr, daemon=True).start()
 

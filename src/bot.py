@@ -1,7 +1,7 @@
 from playwright.sync_api import Playwright, sync_playwright, TimeoutError as PWTimeout
 from dotenv import load_dotenv
 from getpass import getpass
-from datetime import datetime
+from datetime import datetime, date
 import pandas as pd
 import random
 import time
@@ -42,7 +42,8 @@ def pausa(minimo=0.8, maximo=2.0):
 def leer_pacientes():
     df = pd.read_excel(EXCEL_PATH, dtype=str)
     df.columns = df.columns.str.strip()
-    return df
+    df = df[df["Beneficio"].notna() & (df["Beneficio"].str.strip() != "")]
+    return df.reset_index(drop=True)
 
 def login(page):
     print("[1/3] Abriendo PAMI...")
@@ -119,7 +120,6 @@ def cargar_fecha(page, fecha_str):
     pausa(0.5, 1.0)
 
     # El calendario abre siempre en el mes actual — calculamos cuántos meses navegar
-    from datetime import date
     hoy  = date.today()
     diff = (fecha.year - hoy.year) * 12 + (fecha.month - hoy.month)
 
@@ -137,6 +137,14 @@ def cargar_fecha(page, fecha_str):
         has_text=re.compile(rf"^{fecha.day}$")
     ).click()
     pausa()
+
+    try:
+        page.wait_for_selector("text=La fecha/hora de la prestación no puede superar", timeout=2000)
+        page.locator(".z-messagebox-button").click()
+        pausa(0.5, 1.0)
+        raise OrdenError(f"La fecha {fecha_str} supera la fecha actual. PAMI no permite cargar fechas futuras.")
+    except PWTimeout:
+        pass  # fecha válida
 
 # ── Profesional Actuante ──────────────────────────────────────────────────────
 
@@ -254,11 +262,15 @@ def nueva_orden(page, fila):
         cargar_profesional(page)
         cargar_diagnostico(page, fila["Cod_Diagnostico"])
         practica_cols = sorted(c for c in fila.index if c.startswith("Cod_Practica"))
-        for i, col in enumerate(practica_cols):
+        practicas = [str(fila[col]).strip() for col in practica_cols
+                     if pd.notna(fila[col]) and str(fila[col]).strip()]
+        if not practicas:
+            raise PracticaNoEncontrada("No hay códigos de práctica válidos para esta fila.")
+        for i, cod in enumerate(practicas):
             if i > 0:
                 page.locator("#zk_comp_279-cave").click()
                 pausa(0.3, 0.6)
-            cargar_practica(page, fila[col])
+            cargar_practica(page, cod)
     except Exception:
         try:
             cancelar_orden(page)
@@ -269,6 +281,8 @@ def nueva_orden(page, fila):
     if DRY_RUN:
         print("  [MODO PRUEBA] Cancelando sin guardar...")
         page.locator("#zk_comp_318").click()  # CANCELAR_ORDEN
+        page.wait_for_selector("text=ALTA", state="visible", timeout=15000)
+        print(f"  -> PRUEBA: beneficio {fila['Beneficio']}")
     else:
         print("  Guardando orden...")
         page.locator("#zk_comp_317").click()  # ACEPTAR_ORDEN
@@ -280,9 +294,7 @@ def nueva_orden(page, fila):
             pausa(0.5, 1.0)
             cancelar_orden(page)
             raise SesionDuplicada("Ya existe una orden para este afiliado/profesional en esa fecha.")
-        return  # loc_alta visible → guardado exitoso
-    page.wait_for_selector("text=ALTA", state="visible", timeout=15000)
-    print(f"  -> {'PRUEBA' if DRY_RUN else 'OK'}: beneficio {fila['Beneficio']}")
+        print(f"  -> OK: beneficio {fila['Beneficio']}")
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -309,6 +321,16 @@ def run(playwright: Playwright) -> None:
     for idx, fila in df.iterrows():
         beneficio = fila["Beneficio"]
         print(f"\n=== Fila {idx + 1} de {len(df)} | Beneficio {beneficio} ===")
+
+        try:
+            fecha_fila = pd.to_datetime(fila["Fecha"].strip(), dayfirst=True).date()
+            if fecha_fila > date.today():
+                print(f"  [OMITIDO] Fecha futura: {fila['Fecha']}")
+                resultados.append({"beneficio": beneficio, "estado": "OMITIDO", "motivo": f"Fecha futura: {fila['Fecha']}"})
+                continue
+        except Exception:
+            pass
+
         try:
             nueva_orden(page, fila)
             estado = "PRUEBA" if DRY_RUN else "OK"
@@ -320,13 +342,16 @@ def run(playwright: Playwright) -> None:
             print(f"  [ERROR INESPERADO] {e}")
             resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": f"Error inesperado: {e}"})
 
-    sep = "=" * 50
-    ok  = sum(1 for r in resultados if r["estado"] in ("OK", "PRUEBA"))
-    err = len(resultados) - ok
+    sep  = "=" * 50
+    ok   = sum(1 for r in resultados if r["estado"] in ("OK", "PRUEBA"))
+    omit = sum(1 for r in resultados if r["estado"] == "OMITIDO")
+    err  = len(resultados) - ok - omit
     print(f"\n{sep}")
     print("RESUMEN FINAL")
     print(sep)
-    print(f"Total: {len(resultados)} | OK: {ok} | Errores: {err}")
+    print(f"Total: {len(resultados)} | OK: {ok} | Omitidos: {omit} | Errores: {err}")
+    if omit:
+        print(f"\n{omit} fila(s) omitidas por fecha futura (procesables cuando llegue su fecha).")
     if err:
         print("\nDetalle de errores:")
         for r in resultados:
@@ -348,19 +373,25 @@ def run(playwright: Playwright) -> None:
 
     wb = load_workbook(reporte_path)
     ws = wb.active
-    fill_ok  = PatternFill("solid", fgColor="C6EFCE")  # verde suave
-    fill_err = PatternFill("solid", fgColor="FFC7CE")  # rojo suave
+    fill_ok   = PatternFill("solid", fgColor="C6EFCE")  # verde suave
+    fill_err  = PatternFill("solid", fgColor="FFC7CE")  # rojo suave
+    fill_omit = PatternFill("solid", fgColor="FFEB9C")  # amarillo suave
     col_estado = next(c.column for c in ws[1] if c.value == "Estado")
     for row in ws.iter_rows(min_row=2, min_col=col_estado, max_col=col_estado):
         for cell in row:
-            cell.fill = fill_ok if cell.value in ("OK", "PRUEBA") else fill_err
+            if cell.value in ("OK", "PRUEBA"):
+                cell.fill = fill_ok
+            elif cell.value == "OMITIDO":
+                cell.fill = fill_omit
+            else:
+                cell.fill = fill_err
     wb.save(reporte_path)
     print(f"Reporte guardado en {reporte_path}")
 
-    print("\nProceso finalizado. Cerrá el navegador manualmente cuando quieras.")
-    page.pause()
+    print("\nProceso finalizado.")
     context.close()
     browser.close()
 
-with sync_playwright() as playwright:
-    run(playwright)
+if __name__ == "__main__":
+    with sync_playwright() as playwright:
+        run(playwright)
