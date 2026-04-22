@@ -50,4 +50,4 @@ python gui.py
 
 - El sistema PAMI no permite cargar órdenes con fechas futuras
 - El bot detecta y reporta sesiones duplicadas sin interrumpir el proceso
-- `pacientes.xlsx` y `.env` están en `.gitignore` por contener datos sensibles
+- `pacientes.xlsx` está en `.gitignore` por contener datos de pacientes
