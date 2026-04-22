@@ -9,6 +9,7 @@ import threading
 import tkinter as tk
 import pandas as pd
 from datetime import datetime, timedelta
+from pathlib import Path
 from tkinter import messagebox
 
 KEYRING_SERVICE = "pami_bot"
@@ -16,13 +17,16 @@ KEYRING_SERVICE = "pami_bot"
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-FERIADOS_FILE    = "feriados.json"
+DATA_DIR          = Path(__file__).parent.parent / "data"
+DATA_DIR.mkdir(exist_ok=True)
+FERIADOS_FILE     = DATA_DIR / "feriados.json"
+EXCEL_PATH        = DATA_DIR / "pacientes.xlsx"
 DEFAULT_PRACTICAS = ["250101", "250102"]
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def cargar_feriados():
-    if os.path.exists(FERIADOS_FILE):
+    if FERIADOS_FILE.exists():
         try:
             with open(FERIADOS_FILE, "r") as f:
                 data = json.load(f)
@@ -321,128 +325,48 @@ class FeriadosDialog(ctk.CTkToplevel):
         guardar_feriados(self.feriados)
         self.destroy()
 
-# ── Diálogo: Agregar Paciente ─────────────────────────────────────────────────
+# ── Diálogo: Agregar / Editar Paciente ───────────────────────────────────────
 
-class AgregarPacienteDialog(ctk.CTkToplevel):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Agregar Paciente")
-        self.geometry("420x440")
-        self.resizable(False, True)
-        self.grab_set()
-
-        self._practica_rows = []
-
-        hoy = datetime.today().strftime("%d/%m/%Y")
-        campos = [
-            ("Beneficio:",          "entry_beneficio",   "",     "entry"),
-            ("Parentesco:",         "entry_parentesco",  "00",   "parentesco"),
-            ("Cód. Diagnóstico:",   "entry_diagnostico", "",     "entry"),
-            ("Fecha inicio:",       "entry_fecha",       hoy,    "date"),
-            ("Cantidad de sesiones:","entry_sesiones",   "",     "entry"),
-        ]
-
-        for i, (label, attr, default, tipo) in enumerate(campos):
-            ctk.CTkLabel(self, text=label, anchor="w", width=200).grid(
-                row=i, column=0, padx=(20,5), pady=(12,0), sticky="w")
-            if tipo == "parentesco":
-                widget = ParentescoWidget(self, default=default)
-            elif tipo == "date":
-                widget = DateEntry(self, width=160)
-                widget.set(default)
-            else:
-                widget = ctk.CTkEntry(self, width=160)
-                widget.insert(0, default)
-            widget.grid(row=i, column=1, padx=(0,20), pady=(12,0), sticky="w")
-            setattr(self, attr, widget)
-
-        n = len(campos)
-        ctk.CTkLabel(self, text="Códigos de práctica:", anchor="w", width=200).grid(
-            row=n, column=0, padx=(20,5), pady=(12,0), sticky="nw")
-        self.practicas_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.practicas_frame.grid(row=n, column=1, padx=(0,20), pady=(12,0), sticky="w")
-
-        self.btn_agregar_cod = ctk.CTkButton(
-            self.practicas_frame, text="+ Agregar código", width=145,
-            command=self._agregar_entrada_practica)
-        self.btn_agregar_cod.pack(pady=(2,0))
-
-        for cod in DEFAULT_PRACTICAS:
-            self._agregar_entrada_practica(cod)
-
-        ctk.CTkButton(self, text="Agregar", command=self.agregar, width=160).grid(
-            row=n+1, column=0, columnspan=2, pady=16)
-
-    def _agregar_entrada_practica(self, cod=""):
-        fila = ctk.CTkFrame(self.practicas_frame, fg_color="transparent")
-        fila.pack(fill="x", pady=2, before=self.btn_agregar_cod)
-        entry = ctk.CTkEntry(fila, width=110)
-        entry.insert(0, cod)
-        entry.pack(side="left")
-        ref = [fila, entry]
-        self._practica_rows.append(ref)
-        ctk.CTkButton(fila, text="✕", width=28, fg_color="#c0392b",
-                      command=lambda r=ref: self._quitar_practica(r)).pack(side="left", padx=(4,0))
-
-    def _quitar_practica(self, ref):
-        ref[0].destroy()
-        self._practica_rows.remove(ref)
-
-    def agregar(self):
-        try:
-            beneficio   = self.entry_beneficio.get().strip()
-            parentesco  = self.entry_parentesco.get().strip()
-            diagnostico = self.entry_diagnostico.get().strip()
-            fecha_str   = self.entry_fecha.get().strip()
-            sesiones    = int(self.entry_sesiones.get().strip())
-            fecha       = datetime.strptime(fecha_str, "%d/%m/%Y")
-        except ValueError as e:
-            messagebox.showerror("Error", f"Datos inválidos: {e}", parent=self)
-            return
-
-        practicas = [r[1].get().strip() for r in self._practica_rows if r[1].get().strip()]
-
-        if sesiones < 1:
-            messagebox.showerror("Error", "La cantidad de sesiones debe ser al menos 1.", parent=self)
-            return
-
-        if not all([beneficio, parentesco, diagnostico]) or not practicas:
-            messagebox.showerror("Error", "Completá todos los campos e ingresá al menos una práctica.", parent=self)
-            return
-
-        self.parent.pacientes.append({
-            "beneficio":    beneficio,
-            "parentesco":   parentesco,
-            "diagnostico":  diagnostico,
-            "fecha_inicio": fecha,
-            "sesiones":     sesiones,
-            "practicas":    practicas,
-        })
-        self.parent.actualizar_tabla()
-        self.destroy()
-
-# ── Diálogo: Editar Paciente ──────────────────────────────────────────────────
-
-class EditarPacienteDialog(ctk.CTkToplevel):
-    def __init__(self, parent, idx):
+class PacienteDialog(ctk.CTkToplevel):
+    def __init__(self, parent, idx=None):
         super().__init__(parent)
         self.parent = parent
         self.idx    = idx
-        self.title("Editar Paciente")
+        self._practica_rows = []
+
+        es_edicion = idx is not None
+        self.title("Editar Paciente" if es_edicion else "Agregar Paciente")
         self.geometry("420x440")
         self.resizable(False, True)
         self.grab_set()
 
-        self._practica_rows = []
+        hoy = datetime.today().strftime("%d/%m/%Y")
+        if es_edicion:
+            p    = parent.pacientes[idx]
+            vals = {
+                "beneficio":   p["beneficio"],
+                "parentesco":  p["parentesco"],
+                "diagnostico": p["diagnostico"],
+                "fecha":       p["fecha_inicio"].strftime("%d/%m/%Y"),
+                "sesiones":    str(p["sesiones"]),
+                "practicas":   p.get("practicas", DEFAULT_PRACTICAS),
+            }
+        else:
+            vals = {
+                "beneficio":   "",
+                "parentesco":  "00",
+                "diagnostico": "",
+                "fecha":       hoy,
+                "sesiones":    "",
+                "practicas":   DEFAULT_PRACTICAS,
+            }
 
-        p = parent.pacientes[idx]
         campos = [
-            ("Beneficio:",           "entry_beneficio",   p["beneficio"],                         "entry"),
-            ("Parentesco:",          "entry_parentesco",  p["parentesco"],                        "parentesco"),
-            ("Cód. Diagnóstico:",    "entry_diagnostico", p["diagnostico"],                       "entry"),
-            ("Fecha inicio:",        "entry_fecha",       p["fecha_inicio"].strftime("%d/%m/%Y"), "date"),
-            ("Cantidad de sesiones:","entry_sesiones",    str(p["sesiones"]),                     "entry"),
+            ("Beneficio:",            "entry_beneficio",   vals["beneficio"],   "entry"),
+            ("Parentesco:",           "entry_parentesco",  vals["parentesco"],  "parentesco"),
+            ("Cód. Diagnóstico:",     "entry_diagnostico", vals["diagnostico"], "entry"),
+            ("Fecha inicio:",         "entry_fecha",       vals["fecha"],       "date"),
+            ("Cantidad de sesiones:", "entry_sesiones",    vals["sesiones"],    "entry"),
         ]
 
         for i, (label, attr, default, tipo) in enumerate(campos):
@@ -470,10 +394,11 @@ class EditarPacienteDialog(ctk.CTkToplevel):
             command=self._agregar_entrada_practica)
         self.btn_agregar_cod.pack(pady=(2,0))
 
-        for cod in p.get("practicas", DEFAULT_PRACTICAS):
+        for cod in vals["practicas"]:
             self._agregar_entrada_practica(cod)
 
-        ctk.CTkButton(self, text="Guardar", command=self.guardar, width=160).grid(
+        label_btn = "Guardar" if es_edicion else "Agregar"
+        ctk.CTkButton(self, text=label_btn, command=self._guardar, width=160).grid(
             row=n+1, column=0, columnspan=2, pady=16)
 
     def _agregar_entrada_practica(self, cod=""):
@@ -491,7 +416,7 @@ class EditarPacienteDialog(ctk.CTkToplevel):
         ref[0].destroy()
         self._practica_rows.remove(ref)
 
-    def guardar(self):
+    def _guardar(self):
         try:
             beneficio   = self.entry_beneficio.get().strip()
             parentesco  = self.entry_parentesco.get().strip()
@@ -513,7 +438,7 @@ class EditarPacienteDialog(ctk.CTkToplevel):
             messagebox.showerror("Error", "Completá todos los campos e ingresá al menos una práctica.", parent=self)
             return
 
-        self.parent.pacientes[self.idx] = {
+        paciente = {
             "beneficio":    beneficio,
             "parentesco":   parentesco,
             "diagnostico":  diagnostico,
@@ -521,6 +446,11 @@ class EditarPacienteDialog(ctk.CTkToplevel):
             "sesiones":     sesiones,
             "practicas":    practicas,
         }
+        if self.idx is None:
+            self.parent.pacientes.append(paciente)
+        else:
+            self.parent.pacientes[self.idx] = paciente
+
         self.parent.actualizar_tabla()
         self.destroy()
 
@@ -692,7 +622,7 @@ class App(ctk.CTk):
         self.actualizar_tabla()
 
     def abrir_editar_paciente(self, idx):
-        EditarPacienteDialog(self, idx)
+        PacienteDialog(self, idx)
 
     def abrir_credenciales(self):
         CredencialesDialog(self)
@@ -701,7 +631,7 @@ class App(ctk.CTk):
         FeriadosDialog(self)
 
     def abrir_agregar_paciente(self):
-        AgregarPacienteDialog(self)
+        PacienteDialog(self)
 
     def generar_excel(self):
         if not self.pacientes:
@@ -737,7 +667,7 @@ class App(ctk.CTk):
                 return
 
         df = pd.DataFrame(rows)
-        df.to_excel("pacientes.xlsx", index=False)
+        df.to_excel(EXCEL_PATH, index=False)
 
         n_futuras = sum(len(v) for v in por_beneficio.values())
         msg = f"Excel generado: {len(rows)} filas para {len(self.pacientes)} paciente(s).\n"
@@ -754,7 +684,7 @@ class App(ctk.CTk):
         if not self.usuario or not self.clave:
             messagebox.showwarning("Aviso", "Configurá las credenciales primero.")
             return
-        if not os.path.exists("pacientes.xlsx"):
+        if not EXCEL_PATH.exists():
             messagebox.showwarning("Aviso", "Generá el Excel primero.")
             return
 
@@ -770,11 +700,12 @@ class App(ctk.CTk):
 
         def correr():
             proc = subprocess.Popen(
-                [sys.executable, "bot.py"],
+                [sys.executable, Path(__file__).parent / "bot.py"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                env=env
+                env=env,
+                cwd=str(DATA_DIR),
             )
             for linea in proc.stdout:
                 self.after(0, lambda l=linea: self.log_append(l))

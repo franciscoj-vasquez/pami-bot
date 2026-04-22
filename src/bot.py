@@ -2,6 +2,7 @@ from playwright.sync_api import Playwright, sync_playwright, TimeoutError as PWT
 from dotenv import load_dotenv
 from getpass import getpass
 from datetime import datetime, date
+from pathlib import Path
 import pandas as pd
 import random
 import time
@@ -15,7 +16,7 @@ load_dotenv()
 USUARIO    = os.getenv("PAMI_USER") or input("Usuario PAMI: ")
 CLAVE      = os.getenv("PAMI_PASS") or getpass("Contraseña PAMI: ")
 DRY_RUN    = bool(os.getenv("PAMI_DRY_RUN"))
-EXCEL_PATH = "pacientes.xlsx"
+EXCEL_PATH = Path("pacientes.xlsx")  # relativo al cwd = data/
 
 class LoginError(Exception):
     pass
