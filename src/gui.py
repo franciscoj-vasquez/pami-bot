@@ -475,15 +475,22 @@ class PacienteDialog(ctk.CTkToplevel):
         self._practica_rows.remove(ref)
 
     def _guardar(self):
+        beneficio   = self.entry_beneficio.get().strip()
+        parentesco  = self.entry_parentesco.get().strip()
+        diagnostico = self.entry_diagnostico.get().strip().upper()
+        fecha_str   = self.entry_fecha.get().strip()
+        sesiones_str = self.entry_sesiones.get().strip()
+
         try:
-            beneficio   = self.entry_beneficio.get().strip()
-            parentesco  = self.entry_parentesco.get().strip()
-            diagnostico = self.entry_diagnostico.get().strip().upper()
-            fecha_str   = self.entry_fecha.get().strip()
-            sesiones    = int(self.entry_sesiones.get().strip())
-            fecha       = datetime.strptime(fecha_str, "%d/%m/%Y")
-        except ValueError as e:
-            messagebox.showerror("Error", f"Datos inválidos: {e}", parent=self)
+            sesiones = int(sesiones_str)
+        except ValueError:
+            messagebox.showerror("Error", "La cantidad de sesiones debe ser un número entero.", parent=self)
+            return
+
+        try:
+            fecha = datetime.strptime(fecha_str, "%d/%m/%Y")
+        except ValueError:
+            messagebox.showerror("Error", f"La fecha '{fecha_str}' no es válida. Usá el formato DD/MM/AAAA.", parent=self)
             return
 
         practicas = [r[1].get().strip() for r in self._practica_rows if r[1].get().strip()]
