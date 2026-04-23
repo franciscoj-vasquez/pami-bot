@@ -8,17 +8,26 @@ import random
 import time
 import re
 import os
+import winreg
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
+
+def _get_documents_dir() -> Path:
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
+    ) as key:
+        return Path(winreg.QueryValueEx(key, "Personal")[0])
+
 
 load_dotenv()
 
 USUARIO    = os.getenv("PAMI_USER") or input("Usuario PAMI: ")
 CLAVE      = os.getenv("PAMI_PASS") or getpass("Contraseña PAMI: ")
 DRY_RUN    = bool(os.getenv("PAMI_DRY_RUN"))
-EXCEL_PATH   = Path("pacientes.xlsx")  # relativo al cwd = data/
-STOP_FLAG    = Path("stop.flag")
-REPORTE_DIR  = Path.home() / "Documents" / "PAMI-bot"
+PAMI_DIR     = _get_documents_dir() / "PAMI-bot"
+EXCEL_PATH   = PAMI_DIR / "pacientes.xlsx"
+STOP_FLAG    = Path("stop.flag")  # relativo al cwd = data/
 
 class LoginError(Exception):
     pass
@@ -422,8 +431,8 @@ def run(playwright: Playwright) -> None:
             df[""]        = ""  # separador visual
             df = df[["Estado", "Motivo", ""] + otras_cols + practica_cols]
 
-            REPORTE_DIR.mkdir(parents=True, exist_ok=True)
-            reporte_path = REPORTE_DIR / f"reporte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            PAMI_DIR.mkdir(parents=True, exist_ok=True)
+            reporte_path = PAMI_DIR / f"reporte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             df.to_excel(reporte_path, index=False)
 
             wb = load_workbook(reporte_path)

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+import winreg
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -17,11 +18,22 @@ KEYRING_SERVICE = "pami_bot"
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
+
+def _get_documents_dir() -> Path:
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
+    ) as key:
+        return Path(winreg.QueryValueEx(key, "Personal")[0])
+
+
 DATA_DIR          = Path(__file__).parent.parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
+PAMI_DIR          = _get_documents_dir() / "PAMI-bot"
+PAMI_DIR.mkdir(parents=True, exist_ok=True)
 FERIADOS_FILE     = DATA_DIR / "feriados.json"
 PACIENTES_FILE    = DATA_DIR / "pacientes_estado.json"
-EXCEL_PATH        = DATA_DIR / "pacientes.xlsx"
+EXCEL_PATH        = PAMI_DIR / "pacientes.xlsx"
 STOP_FLAG         = DATA_DIR / "stop.flag"
 DEFAULT_PRACTICAS    = ["250101", "250102"]
 COLUMNAS_REQUERIDAS  = {"Beneficio", "Parentesco", "Fecha", "Cod_Diagnostico"}
