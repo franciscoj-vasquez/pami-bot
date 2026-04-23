@@ -44,6 +44,7 @@ STOP_FLAG         = DATA_DIR / "stop.flag"
 DEFAULT_PRACTICAS    = ["250101", "250102"]
 DIAS_NOMBRES         = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
 COLUMNAS_REQUERIDAS  = {"Beneficio", "Parentesco", "Fecha", "Cod_Diagnostico"}
+LOG_ERROR_KEYWORDS   = ("[FALLO]", "[ERROR", "[AVISO]", "[OMITIDO]", "[DETENIDO]")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -654,6 +655,7 @@ class App(ctk.CTk):
         self._excel_activo  = cargar_excel_activo()
         self._proc          = None
         self._hide_after_id = None
+        self._log_lines:    list[str] = []
 
         self._build_ui()
 
@@ -763,6 +765,11 @@ class App(ctk.CTk):
                       fg_color="transparent", border_width=1, hover_color="#444",
                       font=ctk.CTkFont(size=11),
                       command=self._limpiar_log).pack(side="right")
+        self._solo_errores_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(frame_log_header, text="Solo errores", width=110, height=22,
+                        font=ctk.CTkFont(size=11),
+                        variable=self._solo_errores_var,
+                        command=self._aplicar_filtro_log).pack(side="right", padx=(0, 12))
         self.log = ctk.CTkTextbox(self, height=120, state="disabled")
         self.log.grid(row=9, column=0, sticky="nsew", padx=20, pady=(0,15))
 
@@ -1073,11 +1080,28 @@ class App(ctk.CTk):
                 self._proc.terminate()
 
     def _limpiar_log(self):
+        self._log_lines.clear()
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")
         self.log.configure(state="disabled")
 
+    def _aplicar_filtro_log(self):
+        solo_errores = self._solo_errores_var.get()
+        lineas = (
+            [l for l in self._log_lines if any(k in l for k in LOG_ERROR_KEYWORDS)]
+            if solo_errores else self._log_lines
+        )
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")
+        if lineas:
+            self.log.insert("end", "".join(lineas))
+        self.log.see("end")
+        self.log.configure(state="disabled")
+
     def log_append(self, texto):
+        self._log_lines.append(texto)
+        if self._solo_errores_var.get() and not any(k in texto for k in LOG_ERROR_KEYWORDS):
+            return
         self.log.configure(state="normal")
         self.log.insert("end", texto)
         self.log.see("end")
