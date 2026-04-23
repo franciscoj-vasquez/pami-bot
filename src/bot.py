@@ -408,36 +408,43 @@ def run(playwright: Playwright) -> None:
         print(sep)
 
         # ── Guardar reporte Excel con colores ─────────────────────────────────────
-        df["Estado"] = [r["estado"] for r in resultados]
-        df["Motivo"] = [r["motivo"] for r in resultados]
+        try:
+            df["Estado"] = [r["estado"] for r in resultados]
+            df["Motivo"] = [r["motivo"] for r in resultados]
 
-        practica_cols = sorted(c for c in df.columns if c.startswith("Cod_Practica"))
-        otras_cols    = [c for c in df.columns if c not in practica_cols and c not in ("Estado", "Motivo")]
-        df[""]        = ""  # separador visual
-        df = df[["Estado", "Motivo", ""] + otras_cols + practica_cols]
+            practica_cols = sorted(c for c in df.columns if c.startswith("Cod_Practica"))
+            otras_cols    = [c for c in df.columns if c not in practica_cols and c not in ("Estado", "Motivo")]
+            df[""]        = ""  # separador visual
+            df = df[["Estado", "Motivo", ""] + otras_cols + practica_cols]
 
-        reporte_path = f"reporte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        df.to_excel(reporte_path, index=False)
+            reporte_path = f"reporte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            df.to_excel(reporte_path, index=False)
 
-        wb = load_workbook(reporte_path)
-        ws = wb.active
-        fill_ok   = PatternFill("solid", fgColor="C6EFCE")  # verde suave
-        fill_err  = PatternFill("solid", fgColor="FFC7CE")  # rojo suave
-        fill_omit = PatternFill("solid", fgColor="FFEB9C")  # amarillo suave
-        fill_pend = PatternFill("solid", fgColor="D9D9D9")  # gris suave
-        col_estado = next(c.column for c in ws[1] if c.value == "Estado")
-        for row in ws.iter_rows(min_row=2, min_col=col_estado, max_col=col_estado):
-            for cell in row:
-                if cell.value in ("OK", "PRUEBA"):
-                    cell.fill = fill_ok
-                elif cell.value == "OMITIDO":
-                    cell.fill = fill_omit
-                elif cell.value in ("PENDIENTE", "DETENIDO"):
-                    cell.fill = fill_pend
-                else:
-                    cell.fill = fill_err
-        wb.save(reporte_path)
-        print(f"Reporte guardado en {reporte_path}")
+            wb = load_workbook(reporte_path)
+            ws = wb.active
+            fill_ok   = PatternFill("solid", fgColor="C6EFCE")  # verde suave
+            fill_err  = PatternFill("solid", fgColor="FFC7CE")  # rojo suave
+            fill_omit = PatternFill("solid", fgColor="FFEB9C")  # amarillo suave
+            fill_pend = PatternFill("solid", fgColor="D9D9D9")  # gris suave
+            col_estado = next(c.column for c in ws[1] if c.value == "Estado")
+            for row in ws.iter_rows(min_row=2, min_col=col_estado, max_col=col_estado):
+                for cell in row:
+                    if cell.value in ("OK", "PRUEBA"):
+                        cell.fill = fill_ok
+                    elif cell.value == "OMITIDO":
+                        cell.fill = fill_omit
+                    elif cell.value in ("PENDIENTE", "DETENIDO"):
+                        cell.fill = fill_pend
+                    else:
+                        cell.fill = fill_err
+            wb.save(reporte_path)
+            print(f"Reporte guardado en {reporte_path}")
+        except PermissionError:
+            print("[ERROR REPORTE] No se pudo guardar el reporte: el archivo está abierto en Excel o sin permisos de escritura.")
+        except OSError as e:
+            print(f"[ERROR REPORTE] No se pudo guardar el reporte (error de sistema): {e}")
+        except Exception as e:
+            print(f"[ERROR REPORTE] Error inesperado al generar el reporte: {e}")
 
         print("\nProceso finalizado.")
 

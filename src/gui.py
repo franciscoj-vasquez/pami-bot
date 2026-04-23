@@ -823,7 +823,7 @@ class App(ctk.CTk):
         env["PYTHONUNBUFFERED"] = "1"
 
         def correr():
-            resumen = {"ok": 0, "omit": 0, "det": 0, "err": 0, "reporte": None, "detenido": False}
+            resumen = {"ok": 0, "omit": 0, "det": 0, "err": 0, "reporte": None, "detenido": False, "reporte_error": False}
 
             proc = subprocess.Popen(
                 [sys.executable, Path(__file__).parent / "bot.py"],
@@ -851,6 +851,8 @@ class App(ctk.CTk):
                     resumen["reporte"] = m_rep.group(1).strip()
                 if "[DETENIDO]" in linea:
                     resumen["detenido"] = True
+                if "[ERROR REPORTE]" in linea:
+                    resumen["reporte_error"] = True
             proc.wait()
             self._proc = None
 
@@ -877,9 +879,18 @@ class App(ctk.CTk):
                             + (f"{resumen['err']} error(es) encontrado(s).\n" if resumen["err"] else "")
                             + f"\nRevisá el reporte en:\n{resumen['reporte']}"
                         )
-                elif resumen["err"] == 0:
+                elif resumen["err"] == 0 and not resumen["reporte_error"]:
                     sufijo = f" ({resumen['omit']} omitido(s))" if resumen["omit"] else ""
                     self.progress_label.configure(text=f"Completado{sufijo}", text_color="#27ae60")
+                elif resumen["reporte_error"] and resumen["err"] == 0:
+                    sufijo = f" ({resumen['omit']} omitido(s))" if resumen["omit"] else ""
+                    self.progress_label.configure(text=f"Completado{sufijo} — reporte no guardado", text_color="#e67e22")
+                    messagebox.showwarning(
+                        "Reporte no guardado",
+                        f"Las {resumen['ok']} orden(es) se procesaron correctamente,\n"
+                        "pero no se pudo guardar el reporte Excel.\n\n"
+                        "Revisá el log para más detalles (¿archivo abierto en Excel?)."
+                    )
                 else:
                     parte_omit = f", {resumen['omit']} omitido(s)" if resumen["omit"] else ""
                     self.progress_label.configure(
