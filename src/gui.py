@@ -31,7 +31,7 @@ COLUMNAS_REQUERIDAS  = {"Beneficio", "Parentesco", "Fecha", "Cod_Diagnostico"}
 def cargar_feriados():
     if FERIADOS_FILE.exists():
         try:
-            with open(FERIADOS_FILE, "r") as f:
+            with open(FERIADOS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 return data if isinstance(data, list) else []
         except (json.JSONDecodeError, OSError):
@@ -39,7 +39,7 @@ def cargar_feriados():
     return []
 
 def guardar_feriados(feriados):
-    with open(FERIADOS_FILE, "w") as f:
+    with open(FERIADOS_FILE, "w", encoding="utf-8") as f:
         json.dump(feriados, f)
 
 def cargar_pacientes_guardados():
