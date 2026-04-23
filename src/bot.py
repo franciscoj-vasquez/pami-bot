@@ -301,8 +301,7 @@ def nueva_orden(page, fila):
 
     if DRY_RUN:
         print("  [MODO PRUEBA] Cancelando sin guardar...")
-        page.locator("#zk_comp_318").click()  # CANCELAR_ORDEN
-        page.wait_for_selector("text=ALTA", state="visible", timeout=15000)
+        cancelar_orden(page)
         print(f"  -> PRUEBA: beneficio {fila['Beneficio']}")
     else:
         print("  Guardando orden...")
