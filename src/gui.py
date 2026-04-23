@@ -48,11 +48,20 @@ def cargar_pacientes_guardados():
     try:
         with open(PACIENTES_FILE, "r") as f:
             data = json.load(f)
-        for p in data:
-            p["fecha_inicio"] = datetime.strptime(p["fecha_inicio"], "%d/%m/%Y")
-        return data if isinstance(data, list) else []
-    except (json.JSONDecodeError, OSError, ValueError):
+    except (json.JSONDecodeError, OSError):
         return []
+
+    if not isinstance(data, list):
+        return []
+
+    resultado = []
+    for p in data:
+        try:
+            p["fecha_inicio"] = datetime.strptime(p["fecha_inicio"], "%d/%m/%Y")
+            resultado.append(p)
+        except (ValueError, KeyError):
+            print(f"[AVISO] Paciente ignorado por fecha inválida: {p.get('beneficio', '?')}")
+    return resultado
 
 def validar_excel(path):
     try:
@@ -111,6 +120,8 @@ class Tooltip:
         widget.bind("<Leave>", self._hide)
 
     def _show(self, _=None):
+        if self._tip:
+            self._tip.destroy()
         x = self._widget.winfo_rootx() + 20
         y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
         self._tip = tk.Toplevel(self._widget)
