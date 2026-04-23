@@ -17,6 +17,7 @@ USUARIO    = os.getenv("PAMI_USER") or input("Usuario PAMI: ")
 CLAVE      = os.getenv("PAMI_PASS") or getpass("Contraseña PAMI: ")
 DRY_RUN    = bool(os.getenv("PAMI_DRY_RUN"))
 EXCEL_PATH = Path("pacientes.xlsx")  # relativo al cwd = data/
+STOP_FLAG  = Path("stop.flag")
 
 class LoginError(Exception):
     pass
@@ -175,12 +176,14 @@ def cargar_diagnostico(page, cod_diagnostico):
     popup.get_by_role("button", name="Buscar").click()
     pausa(1.5, 3.0)
 
-    if popup.locator(".z-listitem").count() == 0:
+    items = popup.locator(".z-listitem")
+    primer_cod = items.first.locator(".z-listcell").first.inner_text().strip() if items.count() > 0 else ""
+    if primer_cod != cod_diagnostico.upper():
         page.keyboard.press("Escape")
         pausa(0.5, 1.0)
-        raise DiagnosticoNoEncontrado(f"Código de diagnóstico '{cod_diagnostico}' no encontrado.")
+        raise DiagnosticoNoEncontrado(f"Código de diagnóstico '{cod_diagnostico.upper()}' no encontrado.")
 
-    popup.locator(f"text={cod_diagnostico}").first.click()
+    items.first.click()
     pausa()
 
     # PRIMARIO ya viene seleccionado por defecto; click en AGREGAR
@@ -275,8 +278,12 @@ def nueva_orden(page, fila):
     except Exception:
         try:
             cancelar_orden(page)
-        except Exception:
-            pass
+        except Exception as e_cancel:
+            print(f"  [AVISO] No se pudo cancelar la orden: {e_cancel}. Intentando recuperar...")
+            try:
+                ir_a_ambulatorio(page)
+            except Exception:
+                pass
         raise
 
     if DRY_RUN:
@@ -318,8 +325,21 @@ def run(playwright: Playwright) -> None:
     ir_a_ambulatorio(page)
 
     resultados = []
+    detenido   = False
 
     for idx, fila in df.iterrows():
+        if STOP_FLAG.exists():
+            STOP_FLAG.unlink()
+            detenido = True
+            print("[DETENIDO] Ejecución detenida por el usuario.")
+            for fila_pend in df.iloc[idx:].itertuples():
+                resultados.append({
+                    "beneficio": fila_pend.Beneficio,
+                    "estado":    "PENDIENTE",
+                    "motivo":    "Detenido por el usuario",
+                })
+            break
+
         beneficio = fila["Beneficio"]
         print(f"\n=== Fila {idx + 1} de {len(df)} | Beneficio {beneficio} ===")
 
@@ -342,6 +362,9 @@ def run(playwright: Playwright) -> None:
         except Exception as e:
             print(f"  [ERROR INESPERADO] {e}")
             resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": f"Error inesperado: {e}"})
+
+    if detenido:
+        print("REPORTE PARCIAL — procesamiento detenido antes de completar.")
 
     sep  = "=" * 50
     ok   = sum(1 for r in resultados if r["estado"] in ("OK", "PRUEBA"))
@@ -377,6 +400,7 @@ def run(playwright: Playwright) -> None:
     fill_ok   = PatternFill("solid", fgColor="C6EFCE")  # verde suave
     fill_err  = PatternFill("solid", fgColor="FFC7CE")  # rojo suave
     fill_omit = PatternFill("solid", fgColor="FFEB9C")  # amarillo suave
+    fill_pend = PatternFill("solid", fgColor="D9D9D9")  # gris suave
     col_estado = next(c.column for c in ws[1] if c.value == "Estado")
     for row in ws.iter_rows(min_row=2, min_col=col_estado, max_col=col_estado):
         for cell in row:
@@ -384,6 +408,8 @@ def run(playwright: Playwright) -> None:
                 cell.fill = fill_ok
             elif cell.value == "OMITIDO":
                 cell.fill = fill_omit
+            elif cell.value == "PENDIENTE":
+                cell.fill = fill_pend
             else:
                 cell.fill = fill_err
     wb.save(reporte_path)

@@ -20,8 +20,11 @@ ctk.set_default_color_theme("blue")
 DATA_DIR          = Path(__file__).parent.parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 FERIADOS_FILE     = DATA_DIR / "feriados.json"
+PACIENTES_FILE    = DATA_DIR / "pacientes_estado.json"
 EXCEL_PATH        = DATA_DIR / "pacientes.xlsx"
-DEFAULT_PRACTICAS = ["250101", "250102"]
+STOP_FLAG         = DATA_DIR / "stop.flag"
+DEFAULT_PRACTICAS    = ["250101", "250102"]
+COLUMNAS_REQUERIDAS  = {"Beneficio", "Parentesco", "Fecha", "Cod_Diagnostico"}
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -38,6 +41,49 @@ def cargar_feriados():
 def guardar_feriados(feriados):
     with open(FERIADOS_FILE, "w") as f:
         json.dump(feriados, f)
+
+def cargar_pacientes_guardados():
+    if not PACIENTES_FILE.exists():
+        return []
+    try:
+        with open(PACIENTES_FILE, "r") as f:
+            data = json.load(f)
+        for p in data:
+            p["fecha_inicio"] = datetime.strptime(p["fecha_inicio"], "%d/%m/%Y")
+        return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, OSError, ValueError):
+        return []
+
+def validar_excel(path):
+    try:
+        df = pd.read_excel(path, dtype=str)
+    except Exception as e:
+        return False, f"No se pudo leer el archivo: {e}"
+
+    df.columns = df.columns.str.strip()
+    cols = set(df.columns)
+
+    faltantes = COLUMNAS_REQUERIDAS - cols
+    if faltantes:
+        return False, f"Columnas faltantes: {', '.join(sorted(faltantes))}"
+
+    if not any(c.startswith("Cod_Practica") for c in cols):
+        return False, "No se encontró ninguna columna 'Cod_Practica'."
+
+    filas_validas = df[df["Beneficio"].notna() & (df["Beneficio"].str.strip() != "")]
+    if filas_validas.empty:
+        return False, "El archivo no contiene filas con datos válidos."
+
+    return True, ""
+
+def guardar_pacientes_estado(pacientes):
+    data = []
+    for p in pacientes:
+        entry = p.copy()
+        entry["fecha_inicio"] = p["fecha_inicio"].strftime("%d/%m/%Y")
+        data.append(entry)
+    with open(PACIENTES_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 def generar_fechas(fecha_inicio: datetime, cantidad: int, feriados: list) -> list:
     feriados_dt = set()
@@ -160,6 +206,8 @@ class ParentescoWidget(ctk.CTkFrame):
         "99": "UNION CONVIVENCIAL",
     }
 
+    _MAX = 16
+
     def __init__(self, parent, default="00", **kwargs):
         super().__init__(parent, fg_color="transparent", **kwargs)
 
@@ -174,8 +222,6 @@ class ParentescoWidget(ctk.CTkFrame):
                                    anchor="w", width=107)
         self._label.pack(side="left", padx=(8, 0))
         self._tooltip = Tooltip(self._label, full) if len(full) > self._MAX else None
-
-    _MAX = 16
 
     def _desc(self, cod):
         d = self.DESCRIPCIONES.get(cod.strip(), "")
@@ -276,6 +322,7 @@ class FeriadosDialog(ctk.CTkToplevel):
         self.geometry("320x420")
         self.resizable(False, False)
         self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self.cerrar)
 
         self.feriados = cargar_feriados()
 
@@ -420,7 +467,7 @@ class PacienteDialog(ctk.CTkToplevel):
         try:
             beneficio   = self.entry_beneficio.get().strip()
             parentesco  = self.entry_parentesco.get().strip()
-            diagnostico = self.entry_diagnostico.get().strip()
+            diagnostico = self.entry_diagnostico.get().strip().upper()
             fecha_str   = self.entry_fecha.get().strip()
             sesiones    = int(self.entry_sesiones.get().strip())
             fecha       = datetime.strptime(fecha_str, "%d/%m/%Y")
@@ -433,6 +480,15 @@ class PacienteDialog(ctk.CTkToplevel):
         if sesiones < 1:
             messagebox.showerror("Error", "La cantidad de sesiones debe ser al menos 1.", parent=self)
             return
+
+        hace_3_meses = datetime.today() - timedelta(days=90)
+        if fecha < hace_3_meses:
+            if not messagebox.askyesno(
+                "Fecha lejana en el pasado",
+                f"La fecha de inicio es {fecha_str}, hace más de 3 meses.\n\n¿Es correcta?",
+                parent=self
+            ):
+                return
 
         if not all([beneficio, parentesco, diagnostico]) or not practicas:
             messagebox.showerror("Error", "Completá todos los campos e ingresá al menos una práctica.", parent=self)
@@ -457,11 +513,11 @@ class PacienteDialog(ctk.CTkToplevel):
 # ── Diálogo: Fechas Futuras ───────────────────────────────────────────────────
 
 class FechasFuturasDialog(ctk.CTkToplevel):
-    def __init__(self, parent, por_beneficio, max_fecha):
+    def __init__(self, parent, por_beneficio, max_fecha, on_confirm):
         super().__init__(parent)
-        self.result = False
+        self._on_confirm = on_confirm
         self.title("Sesiones con fecha futura")
-        self.geometry("440x360")
+        self.geometry("440x460")
         self.resizable(False, True)
         self.grab_set()
 
@@ -494,11 +550,9 @@ class FechasFuturasDialog(ctk.CTkToplevel):
         ctk.CTkButton(frame_btns, text="Cancelar", fg_color="#c0392b",
                       hover_color="#922b21", command=self.destroy).pack(side="left", padx=8)
 
-        self.wait_window()
-
     def _confirmar(self):
-        self.result = True
         self.destroy()
+        self._on_confirm()
 
 # ── Ventana Principal ─────────────────────────────────────────────────────────
 
@@ -512,9 +566,12 @@ class App(ctk.CTk):
 
         self.usuario   = keyring.get_password(KEYRING_SERVICE, "usuario") or ""
         self.clave     = keyring.get_password(KEYRING_SERVICE, "clave")   or ""
-        self.pacientes = []
+        self.pacientes = cargar_pacientes_guardados()
 
         self._build_ui()
+
+        if self.pacientes:
+            self.actualizar_tabla()
 
         if self.usuario:
             self.log_append(f"Credenciales cargadas para '{self.usuario}'.\n")
@@ -522,7 +579,7 @@ class App(ctk.CTk):
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(3, weight=2)  # tabla crece más
-        self.grid_rowconfigure(9, weight=1)  # log crece menos
+        self.grid_rowconfigure(8, weight=1)  # log crece menos
 
         # ── Título
         ctk.CTkLabel(self, text="PAMI — Carga de Órdenes",
@@ -538,50 +595,66 @@ class App(ctk.CTk):
                       command=self.abrir_feriados).pack(side="left", padx=8)
 
         # ── Tabla de pacientes
-        ctk.CTkLabel(self, text="Pacientes cargados:", anchor="w").grid(
-                     row=2, column=0, sticky="w", padx=20, pady=(15,2))
+        frame_tabla_header = ctk.CTkFrame(self, fg_color="transparent")
+        frame_tabla_header.grid(row=2, column=0, sticky="ew", padx=20, pady=(15,2))
+        ctk.CTkLabel(frame_tabla_header, text="Pacientes cargados:", anchor="w").pack(side="left")
+        ctk.CTkButton(frame_tabla_header, text="Limpiar todo", width=90, height=22,
+                      fg_color="transparent", border_width=1, hover_color="#444",
+                      text_color="#e67e22", font=ctk.CTkFont(size=11),
+                      command=self.limpiar_pacientes).pack(side="right")
 
         self.tabla_frame = ctk.CTkScrollableFrame(self, height=180)
         self.tabla_frame.grid(row=3, column=0, sticky="nsew", padx=20)
         self._headers_tabla()
 
-        # ── Botón agregar paciente
-        ctk.CTkButton(self, text="+ Agregar Paciente",
-                      command=self.abrir_agregar_paciente).grid(row=4, column=0, pady=10)
-
-        # ── Botones de acción
-        frame_acciones = ctk.CTkFrame(self, fg_color="transparent")
-        frame_acciones.grid(row=5, column=0, pady=5)
-        ctk.CTkButton(frame_acciones, text="Generar Excel",
+        # ── Botones de tabla (agregar, limpiar, generar)
+        frame_tabla_btns = ctk.CTkFrame(self, fg_color="transparent")
+        frame_tabla_btns.grid(row=4, column=0, pady=(8, 4))
+        ctk.CTkButton(frame_tabla_btns, text="+ Agregar Paciente",
+                      command=self.abrir_agregar_paciente).pack(side="left", padx=8)
+        ctk.CTkButton(frame_tabla_btns, text="Generar Excel",
                       command=self.generar_excel).pack(side="left", padx=8)
-        self.btn_ejecutar = ctk.CTkButton(frame_acciones, text="Ejecutar Bot", fg_color="#27ae60",
-                      hover_color="#1e8449", command=self.ejecutar_bot)
-        self.btn_ejecutar.pack(side="left", padx=8)
 
-        # ── Modo prueba
-        frame_prueba = ctk.CTkFrame(self, fg_color="transparent")
-        frame_prueba.grid(row=6, column=0, pady=(0,4))
+        # ── Sección Ejecutar Bot + Modo prueba
+        frame_bot = ctk.CTkFrame(self, fg_color="transparent")
+        frame_bot.grid(row=5, column=0, pady=(14, 4))
+        self.btn_ejecutar = ctk.CTkButton(frame_bot, text="Ejecutar Bot", fg_color="#27ae60",
+                      hover_color="#1e8449", command=self.ejecutar_bot)
+        self.btn_ejecutar.pack(side="left", padx=(8, 16))
         self.dry_run_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(frame_prueba, text="Modo prueba (no guarda órdenes)",
+        ctk.CTkCheckBox(frame_bot, text="Modo prueba (no guarda órdenes)",
                         variable=self.dry_run_var,
                         text_color="#e67e22",
                         fg_color="#e67e22", hover_color="#ca6f1e",
-                        checkmark_color="white").pack()
+                        checkmark_color="white").pack(side="left")
 
         # ── Barra de progreso
-        frame_progreso = ctk.CTkFrame(self, fg_color="transparent")
-        frame_progreso.grid(row=7, column=0, sticky="ew", padx=20, pady=(4, 0))
-        self.progress_label = ctk.CTkLabel(frame_progreso, text="", text_color="gray60", width=90, anchor="e")
-        self.progress_label.pack(side="right")
-        self.progress_bar = ctk.CTkProgressBar(frame_progreso)
+        self.frame_progreso = ctk.CTkFrame(self, fg_color="transparent")
+        self.frame_progreso.grid(row=6, column=0, sticky="ew", padx=20, pady=(4, 2))
+        self.frame_progreso.columnconfigure(0, weight=1)
+        self.frame_progreso.columnconfigure(1, weight=0)
+        self.progress_bar = ctk.CTkProgressBar(self.frame_progreso)
         self.progress_bar.set(0)
-        self.progress_bar.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.progress_bar.grid(row=0, column=0, sticky="ew")
+        self.progress_label = ctk.CTkLabel(self.frame_progreso, text="", text_color="gray60")
+        self.progress_label.grid(row=1, column=0)
+        self.btn_detener = ctk.CTkButton(
+            self.frame_progreso, text="Detener", width=80,
+            fg_color="#c0392b", hover_color="#922b21",
+            command=self._detener_bot)
+        self.btn_detener.grid(row=0, column=1, rowspan=2, padx=(10, 0))
+        self.frame_progreso.grid_remove()
 
         # ── Log
-        ctk.CTkLabel(self, text="Log:", anchor="w").grid(
-                     row=8, column=0, sticky="w", padx=20, pady=(10,2))
+        frame_log_header = ctk.CTkFrame(self, fg_color="transparent")
+        frame_log_header.grid(row=7, column=0, sticky="ew", padx=20, pady=(10,2))
+        ctk.CTkLabel(frame_log_header, text="Log:", anchor="w").pack(side="left")
+        ctk.CTkButton(frame_log_header, text="Limpiar", width=70, height=22,
+                      fg_color="transparent", border_width=1, hover_color="#444",
+                      font=ctk.CTkFont(size=11),
+                      command=self._limpiar_log).pack(side="right")
         self.log = ctk.CTkTextbox(self, height=120, state="disabled")
-        self.log.grid(row=9, column=0, sticky="nsew", padx=20, pady=(0,15))
+        self.log.grid(row=8, column=0, sticky="nsew", padx=20, pady=(0,15))
 
     def _headers_tabla(self):
         for col in range(5):
@@ -596,6 +669,7 @@ class App(ctk.CTk):
                          row=0, column=col, padx=4, sticky="ew")
 
     def actualizar_tabla(self):
+        guardar_pacientes_estado(self.pacientes)
         for w in self.tabla_frame.winfo_children():
             w.destroy()
         self._headers_tabla()
@@ -623,6 +697,14 @@ class App(ctk.CTk):
 
     def abrir_editar_paciente(self, idx):
         PacienteDialog(self, idx)
+
+    def limpiar_pacientes(self):
+        if not self.pacientes:
+            return
+        if not messagebox.askyesno("Confirmar", "¿Eliminás todos los pacientes cargados?"):
+            return
+        self.pacientes.clear()
+        self.actualizar_tabla()
 
     def abrir_credenciales(self):
         CredencialesDialog(self)
@@ -662,12 +744,23 @@ class App(ctk.CTk):
 
         if por_beneficio:
             max_fecha = max(f for fechas in por_beneficio.values() for f in fechas)
-            dlg = FechasFuturasDialog(self, por_beneficio, max_fecha)
-            if not dlg.result:
-                return
+            FechasFuturasDialog(
+                self, por_beneficio, max_fecha,
+                on_confirm=lambda: self._escribir_excel(rows, por_beneficio, max_fecha),
+            )
+        else:
+            self._escribir_excel(rows, por_beneficio, max_fecha=None)
 
-        df = pd.DataFrame(rows)
-        df.to_excel(EXCEL_PATH, index=False)
+    def _escribir_excel(self, rows, por_beneficio, max_fecha):
+        try:
+            df = pd.DataFrame(rows)
+            df.to_excel(EXCEL_PATH, index=False)
+        except PermissionError:
+            messagebox.showerror("Error", "No se pudo escribir el archivo. ¿Está abierto en Excel?")
+            return
+        except OSError as e:
+            messagebox.showerror("Error", f"No se pudo escribir el archivo: {e}")
+            return
 
         n_futuras = sum(len(v) for v in por_beneficio.values())
         msg = f"Excel generado: {len(rows)} filas para {len(self.pacientes)} paciente(s).\n"
@@ -677,8 +770,8 @@ class App(ctk.CTk):
         messagebox.showinfo("Listo", "pacientes.xlsx generado correctamente.")
 
     def _update_progress(self, actual, total):
-        self.progress_bar.set(actual / total)
-        self.progress_label.configure(text=f"Fila {actual} / {total}")
+        self.progress_bar.set((actual - 1) / total)
+        self.progress_label.configure(text=f"Fila {actual} / {total}", text_color="gray60")
 
     def ejecutar_bot(self):
         if not self.usuario or not self.clave:
@@ -688,17 +781,34 @@ class App(ctk.CTk):
             messagebox.showwarning("Aviso", "Generá el Excel primero.")
             return
 
+        ok, error = validar_excel(EXCEL_PATH)
+        if not ok:
+            messagebox.showerror(
+                "Excel inválido",
+                f"El archivo pacientes.xlsx tiene un problema:\n\n{error}\n\nRegeneralo desde la aplicación."
+            )
+            return
+
+        if STOP_FLAG.exists():
+            STOP_FLAG.unlink()
+
         self.btn_ejecutar.configure(state="disabled")
+        self.btn_detener.configure(state="normal", text="Detener")
+        self.btn_detener.grid(row=0, column=1, rowspan=2, padx=(10, 0))
+        self.frame_progreso.grid()
         self.progress_bar.set(0)
-        self.progress_label.configure(text="")
+        self.progress_label.configure(text="", text_color="gray60")
         modo = " [MODO PRUEBA]" if self.dry_run_var.get() else ""
         self.log_append(f"Iniciando bot{modo}...\n")
         env = os.environ.copy()
-        env["PAMI_USER"]     = self.usuario
-        env["PAMI_PASS"]     = self.clave
-        env["PAMI_DRY_RUN"]  = "1" if self.dry_run_var.get() else ""
+        env["PAMI_USER"]        = self.usuario
+        env["PAMI_PASS"]        = self.clave
+        env["PAMI_DRY_RUN"]     = "1" if self.dry_run_var.get() else ""
+        env["PYTHONUNBUFFERED"] = "1"
 
         def correr():
+            resumen = {"ok": 0, "omit": 0, "err": 0, "reporte": None, "detenido": False}
+
             proc = subprocess.Popen(
                 [sys.executable, Path(__file__).parent / "bot.py"],
                 stdout=subprocess.PIPE,
@@ -713,13 +823,57 @@ class App(ctk.CTk):
                 if m:
                     actual, total = int(m.group(1)), int(m.group(2))
                     self.after(0, lambda a=actual, t=total: self._update_progress(a, t))
+                m_res = re.search(r"Total: \d+ \| OK: (\d+) \| Omitidos: (\d+) \| Errores: (\d+)", linea)
+                if m_res:
+                    resumen["ok"]   = int(m_res.group(1))
+                    resumen["omit"] = int(m_res.group(2))
+                    resumen["err"]  = int(m_res.group(3))
+                m_rep = re.search(r"Reporte guardado en (.+\.xlsx)", linea)
+                if m_rep:
+                    resumen["reporte"] = m_rep.group(1).strip()
+                if "[DETENIDO]" in linea:
+                    resumen["detenido"] = True
             proc.wait()
-            self.after(0, lambda: self.progress_bar.set(1.0))
-            self.after(0, lambda: self.progress_label.configure(text="Completado"))
-            self.after(0, lambda: self.log_append("Bot finalizado.\n"))
-            self.after(0, lambda: self.btn_ejecutar.configure(state="normal"))
+
+            def _mostrar_resultado():
+                self.progress_bar.set(1.0)
+                self.btn_detener.grid_remove()
+                self.frame_progreso.after(1200, self.frame_progreso.grid_remove)
+                if resumen["detenido"]:
+                    self.progress_label.configure(
+                        text="Detenido — reporte parcial generado", text_color="#f39c12"
+                    )
+                elif resumen["err"] == 0:
+                    sufijo = f" ({resumen['omit']} omitido(s))" if resumen["omit"] else ""
+                    self.progress_label.configure(text=f"Completado{sufijo}", text_color="#27ae60")
+                else:
+                    parte_omit = f", {resumen['omit']} omitido(s)" if resumen["omit"] else ""
+                    self.progress_label.configure(
+                        text=f"Finalizado con {resumen['err']} error(es){parte_omit}",
+                        text_color="#e67e22"
+                    )
+                    if resumen["reporte"]:
+                        messagebox.showwarning(
+                            "Bot finalizado con errores",
+                            f"Se procesaron {resumen['ok']} orden(es) correctamente.\n"
+                            f"{resumen['err']} error(es) encontrado(s).\n\n"
+                            f"Revisá el reporte en:\n{resumen['reporte']}"
+                        )
+                self.log_append("Bot finalizado.\n")
+                self.btn_ejecutar.configure(state="normal")
+
+            self.after(0, _mostrar_resultado)
 
         threading.Thread(target=correr, daemon=True).start()
+
+    def _detener_bot(self):
+        self.btn_detener.configure(state="disabled", text="Deteniendo...")
+        STOP_FLAG.write_text("")
+
+    def _limpiar_log(self):
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")
+        self.log.configure(state="disabled")
 
     def log_append(self, texto):
         self.log.configure(state="normal")
