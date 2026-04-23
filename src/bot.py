@@ -38,8 +38,16 @@ class PracticaNoEncontrada(OrdenError):
 class SesionDuplicada(OrdenError):
     pass
 
+class DetenerError(Exception):
+    """Señal de parada solicitada por el usuario — cancela la orden y genera el reporte."""
+    pass
+
 def pausa(minimo=0.8, maximo=2.0):
     time.sleep(random.uniform(minimo, maximo))
+
+def check_stop():
+    if STOP_FLAG.exists():
+        raise DetenerError()
 
 def leer_pacientes():
     df = pd.read_excel(EXCEL_PATH, dtype=str)
@@ -262,9 +270,13 @@ def nueva_orden(page, fila):
 
     try:
         cargar_afiliado(page, fila["Beneficio"], fila["Parentesco"])
+        check_stop()
         cargar_fecha(page, fila["Fecha"])
+        check_stop()
         cargar_profesional(page)
+        check_stop()
         cargar_diagnostico(page, fila["Cod_Diagnostico"])
+        check_stop()
         practica_cols = sorted(c for c in fila.index if c.startswith("Cod_Practica"))
         practicas = [str(fila[col]).strip() for col in practica_cols
                      if pd.notna(fila[col]) and str(fila[col]).strip()]
@@ -275,6 +287,7 @@ def nueva_orden(page, fila):
                 page.locator("#zk_comp_279-cave").click()
                 pausa(0.3, 0.6)
             cargar_practica(page, cod)
+            check_stop()
     except Exception:
         try:
             cancelar_orden(page)
@@ -329,13 +342,13 @@ def run(playwright: Playwright) -> None:
 
     for idx, fila in df.iterrows():
         if STOP_FLAG.exists():
-            STOP_FLAG.unlink()
+            STOP_FLAG.unlink(missing_ok=True)
             detenido = True
             print("[DETENIDO] Ejecución detenida por el usuario.")
             for fila_pend in df.iloc[idx:].itertuples():
                 resultados.append({
                     "beneficio": fila_pend.Beneficio,
-                    "estado":    "PENDIENTE",
+                    "estado":    "DETENIDO",
                     "motivo":    "Detenido por el usuario",
                 })
             break
@@ -356,6 +369,18 @@ def run(playwright: Playwright) -> None:
             nueva_orden(page, fila)
             estado = "PRUEBA" if DRY_RUN else "OK"
             resultados.append({"beneficio": beneficio, "estado": estado, "motivo": ""})
+        except DetenerError:
+            print(f"  [DETENIDO] Parada solicitada — orden {beneficio} cancelada.")
+            resultados.append({"beneficio": beneficio, "estado": "DETENIDO", "motivo": "Detenido por el usuario"})
+            for fila_pend in df.iloc[idx + 1:].itertuples():
+                resultados.append({
+                    "beneficio": fila_pend.Beneficio,
+                    "estado":    "DETENIDO",
+                    "motivo":    "Detenido por el usuario",
+                })
+            detenido = True
+            STOP_FLAG.unlink(missing_ok=True)
+            break
         except OrdenError as e:
             print(f"  [FALLO] {e}")
             resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": str(e)})
@@ -369,11 +394,12 @@ def run(playwright: Playwright) -> None:
     sep  = "=" * 50
     ok   = sum(1 for r in resultados if r["estado"] in ("OK", "PRUEBA"))
     omit = sum(1 for r in resultados if r["estado"] == "OMITIDO")
-    err  = len(resultados) - ok - omit
+    det  = sum(1 for r in resultados if r["estado"] == "DETENIDO")
+    err  = len(resultados) - ok - omit - det
     print(f"\n{sep}")
     print("RESUMEN FINAL")
     print(sep)
-    print(f"Total: {len(resultados)} | OK: {ok} | Omitidos: {omit} | Errores: {err}")
+    print(f"Total: {len(resultados)} | OK: {ok} | Omitidos: {omit} | Detenidos: {det} | Errores: {err}")
     if omit:
         print(f"\n{omit} fila(s) omitidas por fecha futura (procesables cuando llegue su fecha).")
     if err:
@@ -408,7 +434,7 @@ def run(playwright: Playwright) -> None:
                 cell.fill = fill_ok
             elif cell.value == "OMITIDO":
                 cell.fill = fill_omit
-            elif cell.value == "PENDIENTE":
+            elif cell.value in ("PENDIENTE", "DETENIDO"):
                 cell.fill = fill_pend
             else:
                 cell.fill = fill_err

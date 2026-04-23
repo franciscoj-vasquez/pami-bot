@@ -567,6 +567,8 @@ class App(ctk.CTk):
         self.usuario   = keyring.get_password(KEYRING_SERVICE, "usuario") or ""
         self.clave     = keyring.get_password(KEYRING_SERVICE, "clave")   or ""
         self.pacientes = cargar_pacientes_guardados()
+        self._proc     = None
+        self._hide_after_id = None
 
         self._build_ui()
 
@@ -790,8 +792,11 @@ class App(ctk.CTk):
             return
 
         if STOP_FLAG.exists():
-            STOP_FLAG.unlink()
+            STOP_FLAG.unlink(missing_ok=True)
 
+        if self._hide_after_id is not None:
+            self.frame_progreso.after_cancel(self._hide_after_id)
+            self._hide_after_id = None
         self.btn_ejecutar.configure(state="disabled")
         self.btn_detener.configure(state="normal", text="Detener")
         self.btn_detener.grid(row=0, column=1, rowspan=2, padx=(10, 0))
@@ -807,7 +812,7 @@ class App(ctk.CTk):
         env["PYTHONUNBUFFERED"] = "1"
 
         def correr():
-            resumen = {"ok": 0, "omit": 0, "err": 0, "reporte": None, "detenido": False}
+            resumen = {"ok": 0, "omit": 0, "det": 0, "err": 0, "reporte": None, "detenido": False}
 
             proc = subprocess.Popen(
                 [sys.executable, Path(__file__).parent / "bot.py"],
@@ -817,32 +822,50 @@ class App(ctk.CTk):
                 env=env,
                 cwd=str(DATA_DIR),
             )
+            self._proc = proc
             for linea in proc.stdout:
                 self.after(0, lambda l=linea: self.log_append(l))
                 m = re.search(r"Fila (\d+) de (\d+)", linea)
                 if m:
                     actual, total = int(m.group(1)), int(m.group(2))
                     self.after(0, lambda a=actual, t=total: self._update_progress(a, t))
-                m_res = re.search(r"Total: \d+ \| OK: (\d+) \| Omitidos: (\d+) \| Errores: (\d+)", linea)
+                m_res = re.search(r"Total: \d+ \| OK: (\d+) \| Omitidos: (\d+) \| Detenidos: (\d+) \| Errores: (\d+)", linea)
                 if m_res:
                     resumen["ok"]   = int(m_res.group(1))
                     resumen["omit"] = int(m_res.group(2))
-                    resumen["err"]  = int(m_res.group(3))
+                    resumen["det"]  = int(m_res.group(3))
+                    resumen["err"]  = int(m_res.group(4))
                 m_rep = re.search(r"Reporte guardado en (.+\.xlsx)", linea)
                 if m_rep:
                     resumen["reporte"] = m_rep.group(1).strip()
                 if "[DETENIDO]" in linea:
                     resumen["detenido"] = True
             proc.wait()
+            self._proc = None
 
             def _mostrar_resultado():
                 self.progress_bar.set(1.0)
                 self.btn_detener.grid_remove()
-                self.frame_progreso.after(1200, self.frame_progreso.grid_remove)
+                if self._hide_after_id is not None:
+                    self.frame_progreso.after_cancel(self._hide_after_id)
+                self._hide_after_id = self.frame_progreso.after(1200, self._hide_progreso)
                 if resumen["detenido"]:
+                    partes_det = [f"{resumen['det']} detenida(s)"]
+                    if resumen["ok"]:
+                        partes_det.insert(0, f"{resumen['ok']} OK")
+                    if resumen["err"]:
+                        partes_det.append(f"{resumen['err']} error(es)")
                     self.progress_label.configure(
-                        text="Detenido — reporte parcial generado", text_color="#f39c12"
+                        text=f"Detenido — {', '.join(partes_det)}", text_color="#f39c12"
                     )
+                    if resumen["reporte"]:
+                        messagebox.showwarning(
+                            "Bot detenido",
+                            f"Se procesaron {resumen['ok']} orden(es) correctamente.\n"
+                            f"{resumen['det']} fila(s) marcada(s) como DETENIDO.\n"
+                            + (f"{resumen['err']} error(es) encontrado(s).\n" if resumen["err"] else "")
+                            + f"\nRevisá el reporte en:\n{resumen['reporte']}"
+                        )
                 elif resumen["err"] == 0:
                     sufijo = f" ({resumen['omit']} omitido(s))" if resumen["omit"] else ""
                     self.progress_label.configure(text=f"Completado{sufijo}", text_color="#27ae60")
@@ -866,9 +889,20 @@ class App(ctk.CTk):
 
         threading.Thread(target=correr, daemon=True).start()
 
+    def _hide_progreso(self):
+        self._hide_after_id = None
+        self.frame_progreso.grid_remove()
+
     def _detener_bot(self):
-        self.btn_detener.configure(state="disabled", text="Deteniendo...")
-        STOP_FLAG.write_text("")
+        if not STOP_FLAG.exists():
+            # Primer clic: parada cooperativa — el bot termina el paso actual y genera el reporte
+            STOP_FLAG.write_text("")
+            self.btn_detener.configure(text="Forzar cierre")
+        else:
+            # Segundo clic: bot colgado — matar el proceso (sin reporte)
+            self.btn_detener.configure(state="disabled", text="Cerrando...")
+            if self._proc is not None:
+                self._proc.terminate()
 
     def _limpiar_log(self):
         self.log.configure(state="normal")
