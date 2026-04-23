@@ -5,6 +5,7 @@ reporte_*.xlsx
 
 # Feriados (configuración local, cada usuario tiene los suyos)
 feriados.json
+pacientes_estado.json
 
 # Python
 __pycache__/
