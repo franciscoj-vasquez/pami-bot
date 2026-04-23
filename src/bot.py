@@ -16,8 +16,9 @@ load_dotenv()
 USUARIO    = os.getenv("PAMI_USER") or input("Usuario PAMI: ")
 CLAVE      = os.getenv("PAMI_PASS") or getpass("Contraseña PAMI: ")
 DRY_RUN    = bool(os.getenv("PAMI_DRY_RUN"))
-EXCEL_PATH = Path("pacientes.xlsx")  # relativo al cwd = data/
-STOP_FLAG  = Path("stop.flag")
+EXCEL_PATH   = Path("pacientes.xlsx")  # relativo al cwd = data/
+STOP_FLAG    = Path("stop.flag")
+REPORTE_DIR  = Path.home() / "Documents" / "PAMI-bot"
 
 class LoginError(Exception):
     pass
@@ -417,7 +418,8 @@ def run(playwright: Playwright) -> None:
             df[""]        = ""  # separador visual
             df = df[["Estado", "Motivo", ""] + otras_cols + practica_cols]
 
-            reporte_path = f"reporte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            REPORTE_DIR.mkdir(parents=True, exist_ok=True)
+            reporte_path = REPORTE_DIR / f"reporte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             df.to_excel(reporte_path, index=False)
 
             wb = load_workbook(reporte_path)
