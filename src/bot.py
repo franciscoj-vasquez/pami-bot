@@ -327,123 +327,124 @@ def run(playwright: Playwright) -> None:
     page    = context.new_page()
 
     try:
-        login(page)
-    except LoginError as e:
-        print(f"\n[ERROR FATAL] {e}")
-        print("El bot se detuvo. Corregí las credenciales y volvé a intentarlo.")
+        try:
+            login(page)
+        except LoginError as e:
+            print(f"\n[ERROR FATAL] {e}")
+            print("El bot se detuvo. Corregí las credenciales y volvé a intentarlo.")
+            return
+
+        ir_a_ambulatorio(page)
+
+        resultados = []
+        detenido   = False
+
+        for idx, fila in df.iterrows():
+            if STOP_FLAG.exists():
+                STOP_FLAG.unlink(missing_ok=True)
+                detenido = True
+                print("[DETENIDO] Ejecución detenida por el usuario.")
+                for fila_pend in df.iloc[idx:].itertuples():
+                    resultados.append({
+                        "beneficio": fila_pend.Beneficio,
+                        "estado":    "DETENIDO",
+                        "motivo":    "Detenido por el usuario",
+                    })
+                break
+
+            beneficio = fila["Beneficio"]
+            print(f"\n=== Fila {idx + 1} de {len(df)} | Beneficio {beneficio} ===")
+
+            try:
+                fecha_fila = pd.to_datetime(fila["Fecha"].strip(), dayfirst=True).date()
+                if fecha_fila > date.today():
+                    print(f"  [OMITIDO] Fecha futura: {fila['Fecha']}")
+                    resultados.append({"beneficio": beneficio, "estado": "OMITIDO", "motivo": f"Fecha futura: {fila['Fecha']}"})
+                    continue
+            except Exception:
+                pass
+
+            try:
+                nueva_orden(page, fila)
+                estado = "PRUEBA" if DRY_RUN else "OK"
+                resultados.append({"beneficio": beneficio, "estado": estado, "motivo": ""})
+            except DetenerError:
+                print(f"  [DETENIDO] Parada solicitada — orden {beneficio} cancelada.")
+                resultados.append({"beneficio": beneficio, "estado": "DETENIDO", "motivo": "Detenido por el usuario"})
+                for fila_pend in df.iloc[idx + 1:].itertuples():
+                    resultados.append({
+                        "beneficio": fila_pend.Beneficio,
+                        "estado":    "DETENIDO",
+                        "motivo":    "Detenido por el usuario",
+                    })
+                detenido = True
+                STOP_FLAG.unlink(missing_ok=True)
+                break
+            except OrdenError as e:
+                print(f"  [FALLO] {e}")
+                resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": str(e)})
+            except Exception as e:
+                print(f"  [ERROR INESPERADO] {e}")
+                resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": f"Error inesperado: {e}"})
+
+        if detenido:
+            print("REPORTE PARCIAL — procesamiento detenido antes de completar.")
+
+        sep  = "=" * 50
+        ok   = sum(1 for r in resultados if r["estado"] in ("OK", "PRUEBA"))
+        omit = sum(1 for r in resultados if r["estado"] == "OMITIDO")
+        det  = sum(1 for r in resultados if r["estado"] == "DETENIDO")
+        err  = len(resultados) - ok - omit - det
+        print(f"\n{sep}")
+        print("RESUMEN FINAL")
+        print(sep)
+        print(f"Total: {len(resultados)} | OK: {ok} | Omitidos: {omit} | Detenidos: {det} | Errores: {err}")
+        if omit:
+            print(f"\n{omit} fila(s) omitidas por fecha futura (procesables cuando llegue su fecha).")
+        if err:
+            print("\nDetalle de errores:")
+            for r in resultados:
+                if r["estado"] == "ERROR":
+                    print(f"  - Beneficio {r['beneficio']}: {r['motivo']}")
+        print(sep)
+
+        # ── Guardar reporte Excel con colores ─────────────────────────────────────
+        df["Estado"] = [r["estado"] for r in resultados]
+        df["Motivo"] = [r["motivo"] for r in resultados]
+
+        practica_cols = sorted(c for c in df.columns if c.startswith("Cod_Practica"))
+        otras_cols    = [c for c in df.columns if c not in practica_cols and c not in ("Estado", "Motivo")]
+        df[""]        = ""  # separador visual
+        df = df[["Estado", "Motivo", ""] + otras_cols + practica_cols]
+
+        reporte_path = f"reporte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        df.to_excel(reporte_path, index=False)
+
+        wb = load_workbook(reporte_path)
+        ws = wb.active
+        fill_ok   = PatternFill("solid", fgColor="C6EFCE")  # verde suave
+        fill_err  = PatternFill("solid", fgColor="FFC7CE")  # rojo suave
+        fill_omit = PatternFill("solid", fgColor="FFEB9C")  # amarillo suave
+        fill_pend = PatternFill("solid", fgColor="D9D9D9")  # gris suave
+        col_estado = next(c.column for c in ws[1] if c.value == "Estado")
+        for row in ws.iter_rows(min_row=2, min_col=col_estado, max_col=col_estado):
+            for cell in row:
+                if cell.value in ("OK", "PRUEBA"):
+                    cell.fill = fill_ok
+                elif cell.value == "OMITIDO":
+                    cell.fill = fill_omit
+                elif cell.value in ("PENDIENTE", "DETENIDO"):
+                    cell.fill = fill_pend
+                else:
+                    cell.fill = fill_err
+        wb.save(reporte_path)
+        print(f"Reporte guardado en {reporte_path}")
+
+        print("\nProceso finalizado.")
+
+    finally:
         context.close()
         browser.close()
-        return
-
-    ir_a_ambulatorio(page)
-
-    resultados = []
-    detenido   = False
-
-    for idx, fila in df.iterrows():
-        if STOP_FLAG.exists():
-            STOP_FLAG.unlink(missing_ok=True)
-            detenido = True
-            print("[DETENIDO] Ejecución detenida por el usuario.")
-            for fila_pend in df.iloc[idx:].itertuples():
-                resultados.append({
-                    "beneficio": fila_pend.Beneficio,
-                    "estado":    "DETENIDO",
-                    "motivo":    "Detenido por el usuario",
-                })
-            break
-
-        beneficio = fila["Beneficio"]
-        print(f"\n=== Fila {idx + 1} de {len(df)} | Beneficio {beneficio} ===")
-
-        try:
-            fecha_fila = pd.to_datetime(fila["Fecha"].strip(), dayfirst=True).date()
-            if fecha_fila > date.today():
-                print(f"  [OMITIDO] Fecha futura: {fila['Fecha']}")
-                resultados.append({"beneficio": beneficio, "estado": "OMITIDO", "motivo": f"Fecha futura: {fila['Fecha']}"})
-                continue
-        except Exception:
-            pass
-
-        try:
-            nueva_orden(page, fila)
-            estado = "PRUEBA" if DRY_RUN else "OK"
-            resultados.append({"beneficio": beneficio, "estado": estado, "motivo": ""})
-        except DetenerError:
-            print(f"  [DETENIDO] Parada solicitada — orden {beneficio} cancelada.")
-            resultados.append({"beneficio": beneficio, "estado": "DETENIDO", "motivo": "Detenido por el usuario"})
-            for fila_pend in df.iloc[idx + 1:].itertuples():
-                resultados.append({
-                    "beneficio": fila_pend.Beneficio,
-                    "estado":    "DETENIDO",
-                    "motivo":    "Detenido por el usuario",
-                })
-            detenido = True
-            STOP_FLAG.unlink(missing_ok=True)
-            break
-        except OrdenError as e:
-            print(f"  [FALLO] {e}")
-            resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": str(e)})
-        except Exception as e:
-            print(f"  [ERROR INESPERADO] {e}")
-            resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": f"Error inesperado: {e}"})
-
-    if detenido:
-        print("REPORTE PARCIAL — procesamiento detenido antes de completar.")
-
-    sep  = "=" * 50
-    ok   = sum(1 for r in resultados if r["estado"] in ("OK", "PRUEBA"))
-    omit = sum(1 for r in resultados if r["estado"] == "OMITIDO")
-    det  = sum(1 for r in resultados if r["estado"] == "DETENIDO")
-    err  = len(resultados) - ok - omit - det
-    print(f"\n{sep}")
-    print("RESUMEN FINAL")
-    print(sep)
-    print(f"Total: {len(resultados)} | OK: {ok} | Omitidos: {omit} | Detenidos: {det} | Errores: {err}")
-    if omit:
-        print(f"\n{omit} fila(s) omitidas por fecha futura (procesables cuando llegue su fecha).")
-    if err:
-        print("\nDetalle de errores:")
-        for r in resultados:
-            if r["estado"] == "ERROR":
-                print(f"  - Beneficio {r['beneficio']}: {r['motivo']}")
-    print(sep)
-
-    # ── Guardar reporte Excel con colores ─────────────────────────────────────
-    df["Estado"] = [r["estado"] for r in resultados]
-    df["Motivo"] = [r["motivo"] for r in resultados]
-
-    practica_cols = sorted(c for c in df.columns if c.startswith("Cod_Practica"))
-    otras_cols    = [c for c in df.columns if c not in practica_cols and c not in ("Estado", "Motivo")]
-    df[""]        = ""  # separador visual
-    df = df[["Estado", "Motivo", ""] + otras_cols + practica_cols]
-
-    reporte_path = f"reporte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    df.to_excel(reporte_path, index=False)
-
-    wb = load_workbook(reporte_path)
-    ws = wb.active
-    fill_ok   = PatternFill("solid", fgColor="C6EFCE")  # verde suave
-    fill_err  = PatternFill("solid", fgColor="FFC7CE")  # rojo suave
-    fill_omit = PatternFill("solid", fgColor="FFEB9C")  # amarillo suave
-    fill_pend = PatternFill("solid", fgColor="D9D9D9")  # gris suave
-    col_estado = next(c.column for c in ws[1] if c.value == "Estado")
-    for row in ws.iter_rows(min_row=2, min_col=col_estado, max_col=col_estado):
-        for cell in row:
-            if cell.value in ("OK", "PRUEBA"):
-                cell.fill = fill_ok
-            elif cell.value == "OMITIDO":
-                cell.fill = fill_omit
-            elif cell.value in ("PENDIENTE", "DETENIDO"):
-                cell.fill = fill_pend
-            else:
-                cell.fill = fill_err
-    wb.save(reporte_path)
-    print(f"Reporte guardado en {reporte_path}")
-
-    print("\nProceso finalizado.")
-    context.close()
-    browser.close()
 
 if __name__ == "__main__":
     with sync_playwright() as playwright:
