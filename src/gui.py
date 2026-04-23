@@ -29,13 +29,16 @@ def _get_documents_dir() -> Path:
 
 DATA_DIR          = Path(__file__).parent.parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
-PAMI_DIR          = _get_documents_dir() / "PAMI-bot"
-PAMI_DIR.mkdir(parents=True, exist_ok=True)
+PAMI_DIR          = _get_documents_dir() / "Ordenes PAMI"
+PAMI_PACIENTES    = PAMI_DIR / "pacientes"
+PAMI_PACIENTES.mkdir(parents=True, exist_ok=True)
 FERIADOS_FILE     = DATA_DIR / "feriados.json"
+DIAS_SEMANA_FILE  = DATA_DIR / "dias_semana.json"
 PACIENTES_FILE    = DATA_DIR / "pacientes_estado.json"
-EXCEL_PATH        = PAMI_DIR / "pacientes.xlsx"
+EXCEL_PATH        = PAMI_PACIENTES / "pacientes.xlsx"
 STOP_FLAG         = DATA_DIR / "stop.flag"
 DEFAULT_PRACTICAS    = ["250101", "250102"]
+DIAS_NOMBRES         = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
 COLUMNAS_REQUERIDAS  = {"Beneficio", "Parentesco", "Fecha", "Cod_Diagnostico"}
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -53,6 +56,21 @@ def cargar_feriados():
 def guardar_feriados(feriados):
     with open(FERIADOS_FILE, "w", encoding="utf-8") as f:
         json.dump(feriados, f)
+
+def cargar_dias_semana() -> list:
+    if DIAS_SEMANA_FILE.exists():
+        try:
+            with open(DIAS_SEMANA_FILE, "r") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except (json.JSONDecodeError, OSError):
+            pass
+    return [0, 1, 2, 3, 4]
+
+def guardar_dias_semana(dias: list):
+    with open(DIAS_SEMANA_FILE, "w") as f:
+        json.dump(dias, f)
 
 def cargar_pacientes_guardados():
     if not PACIENTES_FILE.exists():
@@ -106,7 +124,8 @@ def guardar_pacientes_estado(pacientes):
     with open(PACIENTES_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def generar_fechas(fecha_inicio: datetime, cantidad: int, feriados: list) -> list:
+def generar_fechas(fecha_inicio: datetime, cantidad: int, feriados: list, dias_semana=None) -> list:
+    dias_semana = set(dias_semana) if dias_semana is not None else {0, 1, 2, 3, 4}
     feriados_dt = set()
     for f in feriados:
         try:
@@ -116,7 +135,7 @@ def generar_fechas(fecha_inicio: datetime, cantidad: int, feriados: list) -> lis
 
     fechas, fecha = [], fecha_inicio.date()
     while len(fechas) < cantidad:
-        if fecha.weekday() < 5 and fecha not in feriados_dt:
+        if fecha.weekday() in dias_semana and fecha not in feriados_dt:
             fechas.append(fecha)
         fecha += timedelta(days=1)
     return fechas
@@ -341,15 +360,31 @@ class FeriadosDialog(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
-        self.title("Días a excluir")
-        self.geometry("320x420")
+        self.title("Configurar días")
+        self.geometry("320x520")
         self.resizable(False, False)
         self.grab_set()
         self.protocol("WM_DELETE_WINDOW", self.cerrar)
 
         self.feriados = cargar_feriados()
+        dias_activos  = set(cargar_dias_semana())
 
-        ctk.CTkLabel(self, text="Días a excluir (DD/MM/AAAA):").pack(pady=(15,5))
+        # ── Días de atención ──
+        ctk.CTkLabel(self, text="Días de atención:", anchor="w").pack(
+            fill="x", padx=15, pady=(15, 4))
+        self._dia_vars = []
+        for fila_idx in range(0, 7, 3):
+            frame_fila = ctk.CTkFrame(self, fg_color="transparent")
+            frame_fila.pack(fill="x", padx=15, pady=1)
+            for i in range(fila_idx, min(fila_idx + 3, 7)):
+                var = ctk.BooleanVar(value=(i in dias_activos))
+                self._dia_vars.append(var)
+                ctk.CTkCheckBox(frame_fila, text=DIAS_NOMBRES[i], variable=var,
+                                width=80).pack(side="left", padx=(0, 8))
+
+        ctk.CTkFrame(self, height=1, fg_color="gray30").pack(fill="x", padx=15, pady=(10, 0))
+
+        ctk.CTkLabel(self, text="Fechas puntuales a excluir (DD/MM/AAAA):").pack(pady=(10, 5))
 
         self.lista = ctk.CTkScrollableFrame(self, height=220)
         self.lista.pack(fill="x", padx=15)
@@ -393,6 +428,7 @@ class FeriadosDialog(ctk.CTkToplevel):
 
     def cerrar(self):
         guardar_feriados(self.feriados)
+        guardar_dias_semana([i for i, v in enumerate(self._dia_vars) if v.get()])
         self.destroy()
 
 # ── Diálogo: Agregar / Editar Paciente ───────────────────────────────────────
@@ -623,7 +659,7 @@ class App(ctk.CTk):
         frame_config.grid(row=1, column=0, pady=5)
         ctk.CTkButton(frame_config, text="Credenciales",
                       command=self.abrir_credenciales).pack(side="left", padx=8)
-        ctk.CTkButton(frame_config, text="Días a excluir",
+        ctk.CTkButton(frame_config, text="Configurar días",
                       command=self.abrir_feriados).pack(side="left", padx=8)
 
         # ── Tabla de pacientes
@@ -647,12 +683,17 @@ class App(ctk.CTk):
         ctk.CTkButton(frame_tabla_btns, text="Generar Excel",
                       command=self.generar_excel).pack(side="left", padx=8)
 
-        # ── Sección Ejecutar Bot + Modo prueba
+        # ── Sección Ejecutar Bot + opciones
         frame_bot = ctk.CTkFrame(self, fg_color="transparent")
         frame_bot.grid(row=5, column=0, pady=(14, 4))
         self.btn_ejecutar = ctk.CTkButton(frame_bot, text="Ejecutar Bot", fg_color="#27ae60",
                       hover_color="#1e8449", command=self.ejecutar_bot)
         self.btn_ejecutar.pack(side="left", padx=(8, 16))
+
+        self.headless_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(frame_bot, text="Ocultar browser",
+                        variable=self.headless_var).pack(side="left", padx=(0, 16))
+
         self.dry_run_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(frame_bot, text="Modo prueba (no guarda órdenes)",
                         variable=self.dry_run_var,
@@ -665,16 +706,21 @@ class App(ctk.CTk):
         self.frame_progreso.grid(row=6, column=0, sticky="ew", padx=20, pady=(4, 2))
         self.frame_progreso.columnconfigure(0, weight=1)
         self.frame_progreso.columnconfigure(1, weight=0)
-        self.progress_bar = ctk.CTkProgressBar(self.frame_progreso)
+
+        frame_bar = ctk.CTkFrame(self.frame_progreso, fg_color="transparent")
+        frame_bar.grid(row=0, column=0, sticky="ew", pady=(24, 0))
+        frame_bar.columnconfigure(0, weight=1)
+        self.progress_bar = ctk.CTkProgressBar(frame_bar)
         self.progress_bar.set(0)
         self.progress_bar.grid(row=0, column=0, sticky="ew")
-        self.progress_label = ctk.CTkLabel(self.frame_progreso, text="", text_color="gray60")
-        self.progress_label.grid(row=1, column=0)
+        self.progress_label = ctk.CTkLabel(frame_bar, text="", text_color="gray60")
+        self.progress_label.grid(row=1, column=0, sticky="ew")
+
         self.btn_detener = ctk.CTkButton(
             self.frame_progreso, text="Detener", width=80,
             fg_color="#c0392b", hover_color="#922b21",
             command=self._detener_bot)
-        self.btn_detener.grid(row=0, column=1, rowspan=2, padx=(10, 0))
+        self.btn_detener.grid(row=0, column=1, padx=(10, 0))
         self.frame_progreso.grid_remove()
 
         # ── Log
@@ -752,13 +798,14 @@ class App(ctk.CTk):
             messagebox.showwarning("Aviso", "No hay pacientes cargados.")
             return
 
-        feriados = cargar_feriados()
+        feriados    = cargar_feriados()
+        dias_semana = cargar_dias_semana()
         hoy = datetime.today().date()
         rows = []
         por_beneficio = {}
 
         for p in self.pacientes:
-            fechas = generar_fechas(p["fecha_inicio"], p["sesiones"], feriados)
+            fechas = generar_fechas(p["fecha_inicio"], p["sesiones"], feriados, dias_semana)
             practicas = p.get("practicas", DEFAULT_PRACTICAS)
             futuras = [f for f in fechas if f > hoy]
             if futuras:
@@ -829,16 +876,22 @@ class App(ctk.CTk):
             self._hide_after_id = None
         self.btn_ejecutar.configure(state="disabled")
         self.btn_detener.configure(state="normal", text="Detener")
-        self.btn_detener.grid(row=0, column=1, rowspan=2, padx=(10, 0))
+        self.btn_detener.grid(row=0, column=1, padx=(10, 0))
         self.frame_progreso.grid()
         self.progress_bar.set(0)
         self.progress_label.configure(text="", text_color="gray60")
-        modo = " [MODO PRUEBA]" if self.dry_run_var.get() else ""
-        self.log_append(f"Iniciando bot{modo}...\n")
+        partes_modo = []
+        if self.headless_var.get():
+            partes_modo.append("browser oculto")
+        if self.dry_run_var.get():
+            partes_modo.append("modo prueba")
+        sufijo_modo = f" [{', '.join(partes_modo)}]" if partes_modo else ""
+        self.log_append(f"Iniciando bot{sufijo_modo}...\n")
         env = os.environ.copy()
         env["PAMI_USER"]        = self.usuario
         env["PAMI_PASS"]        = self.clave
         env["PAMI_DRY_RUN"]     = "1" if self.dry_run_var.get() else ""
+        env["PAMI_HEADLESS"]    = "1" if self.headless_var.get() else ""
         env["PYTHONUNBUFFERED"] = "1"
 
         def correr():

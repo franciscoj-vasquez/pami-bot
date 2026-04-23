@@ -25,9 +25,12 @@ load_dotenv()
 USUARIO    = os.getenv("PAMI_USER") or input("Usuario PAMI: ")
 CLAVE      = os.getenv("PAMI_PASS") or getpass("Contraseña PAMI: ")
 DRY_RUN    = bool(os.getenv("PAMI_DRY_RUN"))
-PAMI_DIR     = _get_documents_dir() / "PAMI-bot"
-EXCEL_PATH   = PAMI_DIR / "pacientes.xlsx"
-STOP_FLAG    = Path("stop.flag")  # relativo al cwd = data/
+HEADLESS   = bool(os.getenv("PAMI_HEADLESS", "1"))
+PAMI_DIR       = _get_documents_dir() / "Ordenes PAMI"
+PAMI_PACIENTES = PAMI_DIR / "pacientes"
+PAMI_REPORTES  = PAMI_DIR / "reportes"
+EXCEL_PATH     = PAMI_PACIENTES / "pacientes.xlsx"
+STOP_FLAG      = Path("stop.flag")  # relativo al cwd = data/
 
 class LoginError(Exception):
     pass
@@ -98,7 +101,10 @@ def cargar_afiliado(page, beneficio, parentesco):
 
     page.locator("#zk_comp_130-btn").click()
     popup = page.locator("#zk_comp_130-pp")
-    popup.wait_for(state="visible", timeout=10000)
+    try:
+        popup.wait_for(state="visible", timeout=10000)
+    except PWTimeout:
+        raise OrdenError("El panel de búsqueda de afiliado no se abrió. La página puede estar lenta o en un estado inesperado.")
     pausa()
 
     page.locator("#zk_comp_153").click()
@@ -107,13 +113,25 @@ def cargar_afiliado(page, beneficio, parentesco):
     page.locator("#zk_comp_153").type(beneficio, delay=80)  # simula tipeo humano
     pausa(0.5, 1.0)
 
-    # Esperamos a que el combobox de parentesco sea visible dentro del popup
-    page.wait_for_selector("#zk_comp_382-real", state="visible", timeout=10000)
-    page.locator("#zk_comp_382-real").click()
-    pausa(0.5, 1.0)
     cod_parentesco = parentesco.split(" - ")[0] if " - " in parentesco else parentesco
     cod_parentesco = cod_parentesco.strip().zfill(2)  # garantiza 2 dígitos: "1" → "01"
-    items_parentesco = page.locator("#zk_comp_382-pp").locator(".z-comboitem-text", has_text=cod_parentesco)
+
+    # Esperamos el botón flecha del combobox (abre el dropdown); el input solo pone foco
+    parentesco_btn = popup.locator("tr").filter(has_text="Parentesco").locator(".z-combobox-button")
+    try:
+        parentesco_btn.wait_for(state="visible", timeout=10000)
+    except PWTimeout:
+        raise OrdenError(f"El selector de parentesco no apareció (beneficio: '{beneficio}'). La página puede estar lenta.")
+    parentesco_btn.click()
+    pausa(0.5, 1.0)
+
+    dropdown = page.locator(".z-combobox-popup.z-combobox-open")
+    try:
+        dropdown.wait_for(state="visible", timeout=5000)
+    except PWTimeout:
+        raise OrdenError(f"El dropdown de parentesco no se abrió (beneficio: '{beneficio}').")
+
+    items_parentesco = dropdown.locator(".z-comboitem-text", has_text=re.compile(rf"^{cod_parentesco}"))
     if items_parentesco.count() == 0:
         page.keyboard.press("Escape")
         pausa(0.5, 1.0)
@@ -122,14 +140,14 @@ def cargar_afiliado(page, beneficio, parentesco):
     pausa()
 
     popup.get_by_role("button", name="Buscar").click()
-    pausa(1.5, 3.0)
 
-    if popup.locator(".z-listitem").count() == 0:
-        page.keyboard.press("Escape")
-        pausa(0.5, 1.0)
+    primer_item = popup.locator(".z-listitem").first
+    try:
+        primer_item.wait_for(state="visible", timeout=10000)
+    except PWTimeout:
         raise BeneficioNoEncontrado(f"Beneficio '{beneficio}' con parentesco '{parentesco}' no encontrado en PAMI.")
 
-    popup.locator(".z-listitem").first.click()
+    primer_item.click()
     pausa()
 
 # ── Fecha ─────────────────────────────────────────────────────────────────────
@@ -140,7 +158,10 @@ def cargar_fecha(page, fecha_str):
 
     page.locator("#zk_comp_128-real").click()
     popup = page.locator("#zk_comp_128-pp")
-    popup.wait_for(state="visible", timeout=10000)
+    try:
+        popup.wait_for(state="visible", timeout=10000)
+    except PWTimeout:
+        raise OrdenError(f"El calendario de fechas no se abrió al cargar la fecha '{fecha_str}'.")
     pausa(0.5, 1.0)
 
     # El calendario abre siempre en el mes actual — calculamos cuántos meses navegar
@@ -174,9 +195,9 @@ def cargar_fecha(page, fecha_str):
 
 def cargar_profesional(page):
     print("  Profesional actuante...")
-    page.locator("#zk_comp_379-btn").click()
+    page.locator("#zk_comp_380-btn").click()
     pausa(0.5, 1.0)
-    page.locator("#zk_comp_381").click()
+    page.locator("#zk_comp_382").click()
     pausa()
 
 # ── Diagnóstico ───────────────────────────────────────────────────────────────
@@ -186,7 +207,10 @@ def cargar_diagnostico(page, cod_diagnostico):
 
     page.locator("#zk_comp_223-real").click()
     popup = page.locator("#zk_comp_223-pp")
-    popup.wait_for(state="visible", timeout=10000)
+    try:
+        popup.wait_for(state="visible", timeout=10000)
+    except PWTimeout:
+        raise OrdenError(f"El panel de búsqueda de diagnóstico no se abrió al cargar '{cod_diagnostico}'.")
     pausa()
 
     popup.locator("#zk_comp_236").click()
@@ -220,7 +244,10 @@ def cargar_practica(page, cod_practica):
     # Abrir el bandbox de prácticas
     page.locator("#zk_comp_280-real").click()
     popup = page.locator("#zk_comp_280-pp")
-    popup.wait_for(state="visible", timeout=10000)
+    try:
+        popup.wait_for(state="visible", timeout=10000)
+    except PWTimeout:
+        raise OrdenError(f"El panel de búsqueda de prácticas no se abrió al cargar '{cod_practica}'.")
     pausa(0.5, 1.0)
 
     # Escribir el código simulando tipeo humano
@@ -257,17 +284,30 @@ def cargar_practica(page, cod_practica):
     page.locator("#zk_comp_306").fill("1")
     pausa(0.3, 0.5)
 
-    # Modalidad: Afiliado Propio
+    # Modalidad: Afiliado Propio — selección por texto para no depender del ID del item
     page.locator("#zk_comp_308-real").click()
     pausa(0.3, 0.5)
     page.locator("#zk_comp_308-btn").click()
     pausa(0.5, 1.0)
-    page.locator("#zk_comp_439").click()
+    modal_dropdown = page.locator(".z-combobox-popup.z-combobox-open")
+    try:
+        modal_dropdown.wait_for(state="visible", timeout=5000)
+    except PWTimeout:
+        raise OrdenError(f"El dropdown de modalidad no se abrió para práctica '{cod_practica}'.")
+    modal_dropdown.locator(".z-comboitem-text", has_text="AFILIADO PROPIO").click()
     pausa()
 
     # Agregar
     page.locator("#zk_comp_313").click()
     pausa(1.0, 2.0)
+
+    # Cerrar popup de validación si aparece (ej: "Debe seleccionar una modalidad")
+    err_popup = page.locator(".z-messagebox")
+    if err_popup.is_visible():
+        mensaje = err_popup.locator(".z-messagebox-cnt").inner_text().strip()
+        page.locator(".z-messagebox-button").click()
+        pausa(0.5, 1.0)
+        raise OrdenError(f"Error al agregar práctica '{cod_practica}': {mensaje}")
 
 # ── Orden completa ────────────────────────────────────────────────────────────
 
@@ -279,7 +319,10 @@ def nueva_orden(page, fila):
     print(f"  Iniciando ALTA para beneficio {fila['Beneficio']}...")
 
     page.locator("text=ALTA").first.click()
-    page.wait_for_selector("#zk_comp_130-btn", state="visible", timeout=20000)
+    try:
+        page.wait_for_selector("#zk_comp_130-btn", state="visible", timeout=20000)
+    except PWTimeout:
+        raise OrdenError("El formulario de alta no se cargó tras hacer clic en ALTA. La página puede estar lenta.")
     pausa(1.0, 2.0)
 
     try:
@@ -322,7 +365,10 @@ def nueva_orden(page, fila):
         page.locator("#zk_comp_317").click()  # ACEPTAR_ORDEN
         loc_alta      = page.locator("text=ALTA")
         loc_duplicado = page.locator("text=No puede existir mas de un ambulatorio")
-        loc_alta.or_(loc_duplicado).first.wait_for(state="visible", timeout=15000)
+        try:
+            loc_alta.or_(loc_duplicado).first.wait_for(state="visible", timeout=15000)
+        except PWTimeout:
+            raise OrdenError("La orden fue enviada pero PAMI no confirmó el resultado. Verificá manualmente si quedó registrada.")
         if loc_duplicado.is_visible():
             page.locator(".z-messagebox-button").click()  # cerrar popup duplicado
             pausa(0.5, 1.0)
@@ -335,7 +381,7 @@ def nueva_orden(page, fila):
 def run(playwright: Playwright) -> None:
     df = leer_pacientes()
 
-    browser = playwright.chromium.launch(headless=False, slow_mo=300)
+    browser = playwright.chromium.launch(headless=HEADLESS, slow_mo=300)
     context = browser.new_context()
     page    = context.new_page()
 
@@ -431,8 +477,8 @@ def run(playwright: Playwright) -> None:
             df[""]        = ""  # separador visual
             df = df[["Estado", "Motivo", ""] + otras_cols + practica_cols]
 
-            PAMI_DIR.mkdir(parents=True, exist_ok=True)
-            reporte_path = PAMI_DIR / f"reporte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            PAMI_REPORTES.mkdir(parents=True, exist_ok=True)
+            reporte_path = PAMI_REPORTES / f"reporte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             df.to_excel(reporte_path, index=False)
 
             wb = load_workbook(reporte_path)
