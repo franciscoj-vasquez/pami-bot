@@ -481,6 +481,10 @@ class PacienteDialog(ctk.CTkToplevel):
             messagebox.showerror("Error", "La cantidad de sesiones debe ser al menos 1.", parent=self)
             return
 
+        if not all([beneficio, parentesco, diagnostico]) or not practicas:
+            messagebox.showerror("Error", "Completá todos los campos e ingresá al menos una práctica.", parent=self)
+            return
+
         hace_3_meses = datetime.today() - timedelta(days=90)
         if fecha < hace_3_meses:
             if not messagebox.askyesno(
@@ -489,10 +493,6 @@ class PacienteDialog(ctk.CTkToplevel):
                 parent=self
             ):
                 return
-
-        if not all([beneficio, parentesco, diagnostico]) or not practicas:
-            messagebox.showerror("Error", "Completá todos los campos e ingresá al menos una práctica.", parent=self)
-            return
 
         paciente = {
             "beneficio":    beneficio,
