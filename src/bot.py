@@ -104,7 +104,12 @@ def cargar_afiliado(page, beneficio, parentesco):
     pausa(0.5, 1.0)
     cod_parentesco = parentesco.split(" - ")[0] if " - " in parentesco else parentesco
     cod_parentesco = cod_parentesco.strip().zfill(2)  # garantiza 2 dígitos: "1" → "01"
-    page.locator("#zk_comp_382-pp").locator(".z-comboitem-text", has_text=cod_parentesco).first.click()
+    items_parentesco = page.locator("#zk_comp_382-pp").locator(".z-comboitem-text", has_text=cod_parentesco)
+    if items_parentesco.count() == 0:
+        page.keyboard.press("Escape")
+        pausa(0.5, 1.0)
+        raise OrdenError(f"Código de parentesco '{cod_parentesco}' no encontrado en PAMI (beneficio: '{beneficio}').")
+    items_parentesco.first.click()
     pausa()
 
     popup.get_by_role("button", name="Buscar").click()
