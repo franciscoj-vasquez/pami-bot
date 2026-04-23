@@ -125,7 +125,6 @@ def cargar_afiliado(page, beneficio, parentesco):
 
 # ── Fecha ─────────────────────────────────────────────────────────────────────
 
-
 def cargar_fecha(page, fecha_str):
     print(f"  Fecha: {fecha_str}")
     fecha = pd.to_datetime(fecha_str.strip(), dayfirst=True).to_pydatetime()
