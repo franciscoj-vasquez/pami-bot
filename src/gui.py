@@ -3,6 +3,7 @@ import json
 import keyring
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -36,6 +37,9 @@ FERIADOS_FILE     = DATA_DIR / "feriados.json"
 DIAS_SEMANA_FILE  = DATA_DIR / "dias_semana.json"
 PACIENTES_FILE    = DATA_DIR / "pacientes_estado.json"
 EXCEL_PATH        = PAMI_PACIENTES / "pacientes.xlsx"
+PAMI_HISTORIAL    = PAMI_PACIENTES / "historial"
+EXCEL_ACTIVO_FILE = DATA_DIR / "excel_activo.json"
+HISTORIAL_MAX     = 10
 STOP_FLAG         = DATA_DIR / "stop.flag"
 DEFAULT_PRACTICAS    = ["250101", "250102"]
 DIAS_NOMBRES         = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
@@ -71,6 +75,20 @@ def cargar_dias_semana() -> list:
 def guardar_dias_semana(dias: list):
     with open(DIAS_SEMANA_FILE, "w") as f:
         json.dump(dias, f)
+
+def cargar_excel_activo():
+    if EXCEL_ACTIVO_FILE.exists():
+        try:
+            with open(EXCEL_ACTIVO_FILE) as f:
+                p = Path(json.load(f).get("path", ""))
+                return p if p.exists() else None
+        except (json.JSONDecodeError, OSError, KeyError):
+            pass
+    return None
+
+def guardar_excel_activo(path: Path):
+    with open(EXCEL_ACTIVO_FILE, "w") as f:
+        json.dump({"path": str(path)}, f)
 
 def cargar_pacientes_guardados():
     if not PACIENTES_FILE.exists():
@@ -630,10 +648,11 @@ class App(ctk.CTk):
         self.minsize(700, 580)
         self.resizable(True, True)
 
-        self.usuario   = keyring.get_password(KEYRING_SERVICE, "usuario") or ""
-        self.clave     = keyring.get_password(KEYRING_SERVICE, "clave")   or ""
-        self.pacientes = cargar_pacientes_guardados()
-        self._proc     = None
+        self.usuario        = keyring.get_password(KEYRING_SERVICE, "usuario") or ""
+        self.clave          = keyring.get_password(KEYRING_SERVICE, "clave")   or ""
+        self.pacientes      = cargar_pacientes_guardados()
+        self._excel_activo  = cargar_excel_activo()
+        self._proc          = None
         self._hide_after_id = None
 
         self._build_ui()
@@ -647,7 +666,7 @@ class App(ctk.CTk):
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(3, weight=2)  # tabla crece más
-        self.grid_rowconfigure(8, weight=1)  # log crece menos
+        self.grid_rowconfigure(9, weight=1)  # log crece menos
 
         # ── Título
         ctk.CTkLabel(self, text="PAMI — Carga de Órdenes",
@@ -683,11 +702,24 @@ class App(ctk.CTk):
         ctk.CTkButton(frame_tabla_btns, text="Generar Excel",
                       command=self.generar_excel).pack(side="left", padx=8)
 
+        # ── Excel a procesar
+        frame_excel = ctk.CTkFrame(self, fg_color="transparent")
+        frame_excel.grid(row=5, column=0, sticky="ew", padx=20, pady=(10, 2))
+        frame_excel.columnconfigure(1, weight=1)
+        ctk.CTkLabel(frame_excel, text="Excel a procesar:", anchor="w").grid(
+            row=0, column=0, padx=(0, 10))
+        self._excel_entry = ctk.CTkEntry(
+            frame_excel, state="readonly",
+            placeholder_text="Sin Excel seleccionado")
+        self._excel_entry.grid(row=0, column=1, sticky="ew")
+        ctk.CTkButton(frame_excel, text="...", width=36,
+                      command=self._elegir_excel).grid(row=0, column=2, padx=(6, 0))
+
         # ── Sección Ejecutar Bot + opciones
         frame_bot = ctk.CTkFrame(self, fg_color="transparent")
-        frame_bot.grid(row=5, column=0, pady=(14, 4))
+        frame_bot.grid(row=6, column=0, pady=(14, 4))
         self.btn_ejecutar = ctk.CTkButton(frame_bot, text="Ejecutar Bot", fg_color="#27ae60",
-                      hover_color="#1e8449", command=self.ejecutar_bot)
+                      hover_color="#1e8449", command=self.ejecutar_bot, state="disabled")
         self.btn_ejecutar.pack(side="left", padx=(8, 16))
 
         self.headless_var = ctk.BooleanVar(value=True)
@@ -703,7 +735,7 @@ class App(ctk.CTk):
 
         # ── Barra de progreso
         self.frame_progreso = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_progreso.grid(row=6, column=0, sticky="ew", padx=20, pady=(4, 2))
+        self.frame_progreso.grid(row=7, column=0, sticky="ew", padx=20, pady=(4, 2))
         self.frame_progreso.columnconfigure(0, weight=1)
         self.frame_progreso.columnconfigure(1, weight=0)
 
@@ -725,14 +757,16 @@ class App(ctk.CTk):
 
         # ── Log
         frame_log_header = ctk.CTkFrame(self, fg_color="transparent")
-        frame_log_header.grid(row=7, column=0, sticky="ew", padx=20, pady=(10,2))
+        frame_log_header.grid(row=8, column=0, sticky="ew", padx=20, pady=(10,2))
         ctk.CTkLabel(frame_log_header, text="Log:", anchor="w").pack(side="left")
         ctk.CTkButton(frame_log_header, text="Limpiar", width=70, height=22,
                       fg_color="transparent", border_width=1, hover_color="#444",
                       font=ctk.CTkFont(size=11),
                       command=self._limpiar_log).pack(side="right")
         self.log = ctk.CTkTextbox(self, height=120, state="disabled")
-        self.log.grid(row=8, column=0, sticky="nsew", padx=20, pady=(0,15))
+        self.log.grid(row=9, column=0, sticky="nsew", padx=20, pady=(0,15))
+
+        self._set_excel_activo(self._excel_activo)
 
     def _headers_tabla(self):
         for col in range(5):
@@ -784,6 +818,37 @@ class App(ctk.CTk):
         self.pacientes.clear()
         self.actualizar_tabla()
 
+    def _set_excel_activo(self, path):
+        self._excel_activo = path
+        self._excel_entry.configure(state="normal")
+        self._excel_entry.delete(0, "end")
+        if path:
+            guardar_excel_activo(path)
+            self._excel_entry.insert(0, path.name)
+            self._excel_entry.configure(state="readonly")
+            Tooltip(self._excel_entry, str(path))
+            self.btn_ejecutar.configure(state="normal")
+        else:
+            self._excel_entry.configure(state="readonly")
+            self.btn_ejecutar.configure(state="disabled")
+
+    def _elegir_excel(self):
+        from tkinter import filedialog
+        path_str = filedialog.askopenfilename(
+            title="Seleccionar Excel de pacientes",
+            filetypes=[("Excel", "*.xlsx *.xls")],
+            initialdir=str(PAMI_PACIENTES),
+        )
+        if not path_str:
+            return
+        p = Path(path_str)
+        ok, error = validar_excel(p)
+        if not ok:
+            messagebox.showerror("Excel inválido",
+                f"El archivo seleccionado tiene un problema:\n\n{error}")
+            return
+        self._set_excel_activo(p)
+
     def abrir_credenciales(self):
         CredencialesDialog(self)
 
@@ -832,6 +897,13 @@ class App(ctk.CTk):
 
     def _escribir_excel(self, rows, por_beneficio, max_fecha):
         try:
+            if EXCEL_PATH.exists():
+                PAMI_HISTORIAL.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                shutil.move(str(EXCEL_PATH), str(PAMI_HISTORIAL / f"pacientes_{ts}.xlsx"))
+                archivos = sorted(PAMI_HISTORIAL.glob("pacientes_*.xlsx"))
+                for viejo in archivos[:-HISTORIAL_MAX]:
+                    viejo.unlink(missing_ok=True)
             df = pd.DataFrame(rows)
             df.to_excel(EXCEL_PATH, index=False)
         except PermissionError:
@@ -840,6 +912,7 @@ class App(ctk.CTk):
         except OSError as e:
             messagebox.showerror("Error", f"No se pudo escribir el archivo: {e}")
             return
+        self._set_excel_activo(EXCEL_PATH)
 
         n_futuras = sum(len(v) for v in por_beneficio.values())
         msg = f"Excel generado: {len(rows)} filas para {len(self.pacientes)} paciente(s).\n"
@@ -856,11 +929,11 @@ class App(ctk.CTk):
         if not self.usuario or not self.clave:
             messagebox.showwarning("Aviso", "Configurá las credenciales primero.")
             return
-        if not EXCEL_PATH.exists():
-            messagebox.showwarning("Aviso", "Generá el Excel primero.")
+        if not self._excel_activo or not self._excel_activo.exists():
+            messagebox.showwarning("Aviso", "Seleccioná o generá un Excel primero.")
             return
 
-        ok, error = validar_excel(EXCEL_PATH)
+        ok, error = validar_excel(self._excel_activo)
         if not ok:
             messagebox.showerror(
                 "Excel inválido",
@@ -890,6 +963,7 @@ class App(ctk.CTk):
         env = os.environ.copy()
         env["PAMI_USER"]        = self.usuario
         env["PAMI_PASS"]        = self.clave
+        env["PAMI_EXCEL"]       = str(self._excel_activo)
         env["PAMI_DRY_RUN"]     = "1" if self.dry_run_var.get() else ""
         env["PAMI_HEADLESS"]    = "1" if self.headless_var.get() else ""
         env["PYTHONUNBUFFERED"] = "1"

@@ -29,7 +29,7 @@ HEADLESS   = bool(os.getenv("PAMI_HEADLESS", "1"))
 PAMI_DIR       = _get_documents_dir() / "Ordenes PAMI"
 PAMI_PACIENTES = PAMI_DIR / "pacientes"
 PAMI_REPORTES  = PAMI_DIR / "reportes"
-EXCEL_PATH     = PAMI_PACIENTES / "pacientes.xlsx"
+EXCEL_PATH     = Path(os.getenv("PAMI_EXCEL")) if os.getenv("PAMI_EXCEL") else PAMI_PACIENTES / "pacientes.xlsx"
 STOP_FLAG      = Path("stop.flag")  # relativo al cwd = data/
 
 class LoginError(Exception):
