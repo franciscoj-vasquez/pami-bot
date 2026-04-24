@@ -1191,6 +1191,8 @@ class App(ctk.CTk):
         if STOP_FLAG.exists():
             STOP_FLAG.unlink(missing_ok=True)
 
+        self._bot_forzado = False
+
         if self._hide_after_id is not None:
             self.frame_progreso.after_cancel(self._hide_after_id)
             self._hide_after_id = None
@@ -1226,7 +1228,11 @@ class App(ctk.CTk):
         env["PYTHONIOENCODING"]  = "utf-8"
 
         def correr():
-            resumen = {"ok": 0, "omit": 0, "det": 0, "err": 0, "reporte": None, "detenido": False, "reporte_error": False}
+            resumen = {
+                "ok": 0, "omit": 0, "det": 0, "err": 0,
+                "reporte": None, "detenido": False, "reporte_error": False,
+                "login_error": "", "finalizado": False,
+            }
 
             proc = subprocess.Popen(
                 _bot_cmd(),
@@ -1256,6 +1262,10 @@ class App(ctk.CTk):
                     resumen["detenido"] = True
                 if "[ERROR REPORTE]" in linea:
                     resumen["reporte_error"] = True
+                if "[ERROR FATAL]" in linea:
+                    resumen["login_error"] = linea.split("[ERROR FATAL]")[-1].strip()
+                if "Proceso finalizado." in linea:
+                    resumen["finalizado"] = True
             proc.wait()
             self._proc = None
 
@@ -1265,6 +1275,28 @@ class App(ctk.CTk):
                 if self._hide_after_id is not None:
                     self.frame_progreso.after_cancel(self._hide_after_id)
                 self._hide_after_id = self.frame_progreso.after(1200, self._hide_progreso)
+
+                if resumen["login_error"]:
+                    self.progress_label.configure(text="Error de credenciales", text_color="#e74c3c")
+                    self.log_append("Bot finalizado con error de credenciales.\n")
+                    self.btn_ejecutar.configure(state="normal")
+                    messagebox.showerror(
+                        "Error de autenticación",
+                        f"{resumen['login_error']}\n\nVerificá las credenciales en Configuración.",
+                    )
+                    return
+
+                if not resumen["finalizado"] and not self._bot_forzado:
+                    self.progress_label.configure(text="Error inesperado — revisá el log", text_color="#e74c3c")
+                    self.log_append("Bot finalizado con error inesperado.\n")
+                    self.btn_ejecutar.configure(state="normal")
+                    messagebox.showerror(
+                        "Error inesperado",
+                        "El bot terminó de forma inesperada sin procesar órdenes.\n\n"
+                        "Abrí el log (Ctrl+Shift+L) para ver el detalle del error.",
+                    )
+                    return
+
                 if resumen["detenido"]:
                     partes_det = [f"{resumen['det']} detenida(s)"]
                     if resumen["ok"]:
@@ -1346,6 +1378,7 @@ class App(ctk.CTk):
             self.btn_detener.configure(text="Forzar cierre")
         else:
             # Segundo clic: bot colgado — matar el proceso (sin reporte)
+            self._bot_forzado = True
             self.btn_detener.configure(state="disabled", text="Cerrando...")
             if self._proc is not None:
                 self._proc.terminate()
