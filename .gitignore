@@ -7,6 +7,7 @@ feriados.json
 pacientes_estado.json
 dias_semana.json
 excel_activo.json
+*.log
 
 # Python
 __pycache__/
