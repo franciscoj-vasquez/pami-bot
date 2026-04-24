@@ -17,6 +17,14 @@ from tkinter import messagebox
 
 KEYRING_SERVICE = "pami_bot"
 
+
+def _bot_cmd() -> list:
+    """Devuelve el comando para lanzar el bot como subproceso.
+    En producción (frozen) usa bot_runner.exe; en desarrollo usa bot.py directamente."""
+    if getattr(sys, "frozen", False):
+        return [str(Path(sys.executable).parent / "bot_runner.exe")]
+    return [sys.executable, str(Path(__file__).parent / "bot.py")]
+
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
@@ -29,8 +37,11 @@ def _get_documents_dir() -> Path:
         return Path(winreg.QueryValueEx(key, "Personal")[0])
 
 
-DATA_DIR          = Path(__file__).parent.parent / "data"
-DATA_DIR.mkdir(exist_ok=True)
+if getattr(sys, "frozen", False):
+    DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "KINETICA" / "data"
+else:
+    DATA_DIR = Path(__file__).parent.parent / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 PAMI_DIR          = _get_documents_dir() / "Ordenes PAMI"
 PAMI_PACIENTES    = PAMI_DIR / "pacientes"
 PAMI_PACIENTES.mkdir(parents=True, exist_ok=True)
@@ -648,7 +659,7 @@ class FechasFuturasDialog(ctk.CTkToplevel):
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("PAMI - Carga de Órdenes")
+        self.title("KINETICA - Carga de Órdenes PAMI")
         self.geometry("700x550")
         self.minsize(700, 550)
         self.resizable(True, True)
@@ -685,7 +696,7 @@ class App(ctk.CTk):
         self.grid_rowconfigure(10, weight=1)  # log crece menos
 
         # ── Título
-        ctk.CTkLabel(self, text="PAMI — Carga de Órdenes",
+        ctk.CTkLabel(self, text="KINETICA — Carga de Órdenes PAMI",
                      font=ctk.CTkFont(size=18, weight="bold")).grid(
                      row=0, column=0, pady=(20,5))
 
@@ -1011,6 +1022,9 @@ class App(ctk.CTk):
         env["PAMI_HEADLESS"]    = "1" if self.headless_var.get() else ""
         env["PAMI_RETRIES"]     = "1" if self.retry_var.get() else "0"
         env["PAMI_SPEED"]       = self.speed_var.get().lower()
+        env["PLAYWRIGHT_BROWSERS_PATH"] = str(
+            Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ms-playwright"
+        )
         env["PYTHONUNBUFFERED"]  = "1"
         env["PYTHONIOENCODING"]  = "utf-8"
 
@@ -1018,7 +1032,7 @@ class App(ctk.CTk):
             resumen = {"ok": 0, "omit": 0, "det": 0, "err": 0, "reporte": None, "detenido": False, "reporte_error": False}
 
             proc = subprocess.Popen(
-                [sys.executable, Path(__file__).parent / "bot.py"],
+                _bot_cmd(),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

@@ -1,3 +1,27 @@
+import sys as _sys
+
+# Modo instalador: descarga Chromium y termina, sin iniciar el bot ni pedir credenciales.
+# Invocado por Inno Setup como post-install: bot_runner.exe --install-browsers
+if "--install-browsers" in _sys.argv:
+    from pathlib import Path as _Path
+    import subprocess as _sp
+    _drv = (
+        _Path(_sys._MEIPASS) / "playwright" / "driver"
+        if getattr(_sys, "frozen", False)
+        else _Path(__file__).resolve().parents[1] / "venv" / "Lib" / "site-packages" / "playwright" / "driver"
+    )
+    _node, _cli = _drv / "node.exe", _drv / "package" / "cli.js"
+    if _node.exists() and _cli.exists():
+        import os as _os
+        _env = _os.environ.copy()
+        _env["PLAYWRIGHT_BROWSERS_PATH"] = str(
+            _Path(_os.environ.get("LOCALAPPDATA", str(_Path.home()))) / "ms-playwright"
+        )
+        _sys.exit(_sp.run([str(_node), str(_cli), "install", "chromium"], env=_env,
+                         creationflags=_sp.CREATE_NO_WINDOW).returncode)
+    print("[ERROR] No se encontró el driver de Playwright.")
+    _sys.exit(1)
+
 from playwright.sync_api import Playwright, sync_playwright, TimeoutError as PWTimeout
 from dotenv import load_dotenv
 from getpass import getpass
