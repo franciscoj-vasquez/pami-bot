@@ -24,8 +24,8 @@ load_dotenv()
 
 USUARIO    = os.getenv("PAMI_USER") or input("Usuario PAMI: ")
 CLAVE      = os.getenv("PAMI_PASS") or getpass("Contraseña PAMI: ")
-DRY_RUN    = bool(os.getenv("PAMI_DRY_RUN"))
-HEADLESS   = bool(os.getenv("PAMI_HEADLESS", "1"))
+DRY_RUN    = os.getenv("PAMI_DRY_RUN",  "") not in ("", "0", "false")
+HEADLESS   = os.getenv("PAMI_HEADLESS", "1") not in ("", "0", "false")
 PAMI_DIR       = _get_documents_dir() / "Ordenes PAMI"
 PAMI_PACIENTES = PAMI_DIR / "pacientes"
 PAMI_REPORTES  = PAMI_DIR / "reportes"
@@ -181,7 +181,7 @@ def cargar_fecha(page, fecha_str):
         popup.wait_for(state="visible", timeout=10000)
     except PWTimeout:
         raise OrdenError(f"El calendario de fechas no se abrió al cargar la fecha '{fecha_str}'.")
-    pausa_corta()
+    time.sleep(0.3)  # esperar render inicial del calendario — fijo, independiente del perfil
 
     # El calendario abre siempre en el mes actual — calculamos cuántos meses navegar
     hoy  = date.today()
@@ -190,16 +190,18 @@ def cargar_fecha(page, fecha_str):
     if diff < 0:
         for _ in range(abs(diff)):
             popup.locator("[id$='-left']").click()
-            time.sleep(0.25)  # re-render local del DOM, sin network — mínimo fijo
+            time.sleep(0.55)  # ZK anima la transición de mes (~300-500ms) — fijo para garantizar estabilidad
     elif diff > 0:
         for _ in range(diff):
             popup.locator("[id$='-right']").click()
-            time.sleep(0.25)
+            time.sleep(0.55)
 
-    # Clickeamos el día exacto, excluyendo días del mes adyacente
+    # Clickeamos el día exacto, excluyendo días del mes adyacente.
+    # Se usa .first como seguro: si la animación aún no terminó y hay 2 grillas en el DOM,
+    # no se lanza strict mode violation. Con 0.55s de espera el caso normal tiene 1 sola celda.
     popup.locator("td.z-calendar-cell:not(.z-calendar-outside)").filter(
         has_text=re.compile(rf"^{fecha.day}$")
-    ).click()
+    ).first.click()
     pausa()
 
     try:
