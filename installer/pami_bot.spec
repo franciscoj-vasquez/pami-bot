@@ -50,6 +50,8 @@ a_gui = Analysis(
         "PIL._imagingtk",
         "keyring.backends.Windows",
         "keyring.backends.fail",
+        "requests",
+        "licencia",
     ],
     hookspath=[],
     runtime_hooks=[],

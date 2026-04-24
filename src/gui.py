@@ -15,6 +15,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import messagebox
 
+import queue as _queue
+
+import licencia as _lic
+
 KEYRING_SERVICE = "pami_bot"
 
 
@@ -654,6 +658,199 @@ class FechasFuturasDialog(ctk.CTkToplevel):
         self.destroy()
         self._on_confirm()
 
+# ── Diálogo: Activación de Licencia ──────────────────────────────────────────
+
+class LicenseDialog(ctk.CTkToplevel):
+    """
+    Ventana de activación/verificación de licencia.
+    Se muestra antes de la App principal cuando no hay licencia válida en caché.
+    """
+
+    def __init__(self, parent, cached_result=None):
+        super().__init__(parent)
+        self.license_ok   = False
+        self._cache_path  = DATA_DIR / "license.dat"
+        self._result_queue: _queue.Queue = _queue.Queue()
+
+        self.title("KINETICA — Activación de Licencia")
+        self.geometry("430x310")
+        self.resizable(False, False)
+        self.grab_set()
+        self.lift()
+        self.focus_force()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        ctk.CTkLabel(
+            self, text="KINETICA",
+            font=ctk.CTkFont(size=22, weight="bold"),
+        ).pack(pady=(24, 2))
+        ctk.CTkLabel(
+            self, text="Carga de Órdenes PAMI",
+            text_color="gray55", font=ctk.CTkFont(size=12),
+        ).pack()
+        ctk.CTkFrame(self, height=1, fg_color="gray30").pack(fill="x", padx=30, pady=(16, 0))
+
+        self._body = ctk.CTkFrame(self, fg_color="transparent")
+        self._body.pack(fill="both", expand=True, padx=30, pady=16)
+
+        if cached_result is None:
+            self._show_entry()
+        elif cached_result.reason == "expired":
+            self._show_msg(
+                f"Tu licencia venció el {cached_result.expires_fmt}.\n"
+                "Contactá al administrador para renovarla.",
+                color="#e67e22", show_close=True,
+            )
+        elif cached_result.reason == "machine_mismatch":
+            self._show_msg(
+                "Esta clave ya está activada en otro equipo.\n"
+                "Contactá al administrador si cambiaste de computadora.",
+                color="#e74c3c", show_close=True,
+            )
+        else:
+            self._show_entry(error=self._reason_msg(cached_result.reason))
+
+    # ── Estados de la UI ──────────────────────────────────────────────────────
+
+    def _clear_body(self):
+        for w in self._body.winfo_children():
+            w.destroy()
+
+    def _show_entry(self, error: str = ""):
+        self._clear_body()
+        ctk.CTkLabel(
+            self._body, text="Ingresá tu clave de licencia:", anchor="w",
+        ).pack(fill="x")
+
+        self._key_var = ctk.StringVar()
+        entry = ctk.CTkEntry(
+            self._body, textvariable=self._key_var,
+            placeholder_text="KINE-XXXX-XXXX-XXXX",
+            width=300, justify="center",
+            font=ctk.CTkFont(family="Courier New", size=13),
+        )
+        entry.pack(pady=(6, 0))
+        entry.focus_set()
+        entry.bind("<Return>", lambda _: self._activar())
+
+        if error:
+            ctk.CTkLabel(
+                self._body, text=error,
+                text_color="#e74c3c", wraplength=360,
+                font=ctk.CTkFont(size=11),
+            ).pack(pady=(8, 0))
+
+        ctk.CTkButton(
+            self._body, text="Activar", width=160,
+            fg_color="#27ae60", hover_color="#1e8449",
+            command=self._activar,
+        ).pack(pady=(18, 0))
+
+    def _show_checking(self):
+        self._clear_body()
+        ctk.CTkLabel(
+            self._body, text="Verificando licencia…", text_color="gray70",
+        ).pack(pady=(24, 10))
+        bar = ctk.CTkProgressBar(self._body, mode="indeterminate", width=300)
+        bar.pack()
+        bar.start()
+
+    def _show_success(self, result: _lic.LicenseResult):
+        self._clear_body()
+        msg = "¡Licencia activada!" if result.first_activation else "Licencia verificada."
+        ctk.CTkLabel(
+            self._body, text="✓",
+            text_color="#27ae60", font=ctk.CTkFont(size=36),
+        ).pack(pady=(8, 4))
+        ctk.CTkLabel(
+            self._body, text=msg,
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).pack()
+        ctk.CTkLabel(
+            self._body,
+            text=f"Válida hasta el {result.expires_fmt}  ({result.days_left} día(s) restantes).",
+            text_color="gray60", font=ctk.CTkFont(size=11),
+        ).pack(pady=(6, 0))
+
+    def _show_msg(self, text: str, color: str, show_close: bool = False):
+        self._clear_body()
+        ctk.CTkLabel(
+            self._body, text=text,
+            text_color=color, wraplength=360, justify="center",
+        ).pack(pady=(20, 0))
+        if show_close:
+            ctk.CTkButton(
+                self._body, text="Cerrar", width=120,
+                command=self._on_close,
+            ).pack(pady=(22, 0))
+
+    # ── Lógica ────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _reason_msg(reason: str) -> str:
+        return {
+            "key_not_found":    "Clave no reconocida. Verificá e intentá de nuevo.",
+            "offline_expired":  (
+                "Sin conexión a internet y el período de gracia venció.\n"
+                "Conectate e intentá de nuevo."
+            ),
+            "connection_error": (
+                "No se pudo conectar al servidor de licencias.\n"
+                "Verificá tu conexión a internet e intentá de nuevo."
+            ),
+        }.get(reason, "Error al verificar la licencia. Intentá de nuevo.")
+
+    def _activar(self):
+        raw = self._key_var.get()
+        key = _lic.normalize_key(raw)
+        if not _lic.is_valid_format(key):
+            self._show_entry(error="Formato inválido. Ejemplo: KINE-ABCD-EFGH-JKMN")
+            return
+        self._show_checking()
+        threading.Thread(target=self._check_thread, args=(key,), daemon=True).start()
+        self._poll_result_queue()
+
+    def _check_thread(self, key: str):
+        result = _lic.check(key, self._cache_path)
+        self._result_queue.put((key, result))
+
+    def _poll_result_queue(self):
+        try:
+            key, result = self._result_queue.get_nowait()
+            self._on_result(key, result)
+            return
+        except _queue.Empty:
+            pass
+        if self.winfo_exists():
+            self.after(50, self._poll_result_queue)
+
+    def _on_result(self, key: str, result: _lic.LicenseResult):
+        if result.valid:
+            self._show_success(result)
+            self.after(2000, self._close_ok)
+        elif result.reason == "expired":
+            self._show_msg(
+                f"Tu licencia venció el {result.expires_fmt}.\n"
+                "Contactá al administrador para renovarla.",
+                color="#e67e22", show_close=True,
+            )
+        elif result.reason == "machine_mismatch":
+            self._show_msg(
+                "Esta clave ya está activada en otro equipo.\n"
+                "Contactá al administrador si cambiaste de computadora.",
+                color="#e74c3c", show_close=True,
+            )
+        else:
+            self._show_entry(error=self._reason_msg(result.reason))
+
+    def _close_ok(self):
+        self.license_ok = True
+        self.destroy()
+
+    def _on_close(self):
+        self.destroy()
+
+
 # ── Ventana Principal ─────────────────────────────────────────────────────────
 
 class App(ctk.CTk):
@@ -1183,4 +1380,26 @@ class App(ctk.CTk):
         self.log.configure(state="disabled")
 
 if __name__ == "__main__":
+    # ── Verificación de licencia (antes de mostrar la App) ────────────────────
+    _cache_path  = DATA_DIR / "license.dat"
+    _cache       = _lic.load_cache(_cache_path)
+    _cached_key  = _cache.get("key") if _cache else None
+    _init_result = None
+
+    if _cached_key:
+        # Puede ser instantáneo (caché fresca) o tardar ~1-2s (re-validación online)
+        _init_result = _lic.check(_cached_key, _cache_path)
+
+    _need_dialog = (_init_result is None) or (not _init_result.valid)
+
+    if _need_dialog:
+        _root = ctk.CTk()
+        _root.withdraw()  # ventana raíz oculta, solo sirve de padre para el diálogo
+        _dlg  = LicenseDialog(_root, cached_result=_init_result)
+        _root.wait_window(_dlg)
+        if not _dlg.license_ok:
+            _root.destroy()
+            sys.exit(0)
+        _root.destroy()
+
     App().mainloop()

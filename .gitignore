@@ -2,8 +2,12 @@
 build/
 dist/
 
+# Datos de runtime (generados al ejecutar la app)
+data/
+
 # Credenciales y datos sensibles
 .env
+src/_config.py
 pacientes.xlsx
 reporte_*.xlsx
 
