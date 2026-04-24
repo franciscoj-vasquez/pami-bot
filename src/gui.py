@@ -1397,9 +1397,10 @@ if __name__ == "__main__":
         _root.withdraw()  # ventana raíz oculta, solo sirve de padre para el diálogo
         _dlg  = LicenseDialog(_root, cached_result=_init_result)
         _root.wait_window(_dlg)
-        if not _dlg.license_ok:
-            _root.destroy()
-            sys.exit(0)
+        _ok = _dlg.license_ok
+        _root.update()
         _root.destroy()
+        if not _ok:
+            sys.exit(0)
 
     App().mainloop()
