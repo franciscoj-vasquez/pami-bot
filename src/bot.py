@@ -29,7 +29,8 @@ HEADLESS   = os.getenv("PAMI_HEADLESS", "1") not in ("", "0", "false")
 PAMI_DIR       = _get_documents_dir() / "Ordenes PAMI"
 PAMI_PACIENTES = PAMI_DIR / "pacientes"
 PAMI_REPORTES  = PAMI_DIR / "reportes"
-EXCEL_PATH     = Path(os.getenv("PAMI_EXCEL")) if os.getenv("PAMI_EXCEL") else PAMI_PACIENTES / "pacientes.xlsx"
+_excel_env     = os.getenv("PAMI_EXCEL")
+EXCEL_PATH     = Path(_excel_env) if _excel_env else PAMI_PACIENTES / "pacientes.xlsx"
 STOP_FLAG      = Path("stop.flag")  # relativo al cwd = data/
 RETRIES        = int(os.getenv("PAMI_RETRIES", "0"))
 
