@@ -31,6 +31,20 @@ PAMI_PACIENTES = PAMI_DIR / "pacientes"
 PAMI_REPORTES  = PAMI_DIR / "reportes"
 EXCEL_PATH     = Path(os.getenv("PAMI_EXCEL")) if os.getenv("PAMI_EXCEL") else PAMI_PACIENTES / "pacientes.xlsx"
 STOP_FLAG      = Path("stop.flag")  # relativo al cwd = data/
+RETRIES        = int(os.getenv("PAMI_RETRIES", "0"))
+
+_PROFILES = {
+    "cauteloso": dict(slow_mo=250, pausa_min=0.8,  pausa_max=2.0,  corta_min=0.4, corta_max=0.8,  typing=120),
+    "normal":    dict(slow_mo=150, pausa_min=0.4,  pausa_max=1.0,  corta_min=0.2, corta_max=0.5,  typing=80),
+    "rapido":    dict(slow_mo=80,  pausa_min=0.15, pausa_max=0.4,  corta_min=0.1, corta_max=0.25, typing=50),
+}
+_p        = _PROFILES.get(os.getenv("PAMI_SPEED", "normal"), _PROFILES["normal"])
+SLOW_MO   = _p["slow_mo"]
+PAUSA_MIN = _p["pausa_min"]
+PAUSA_MAX = _p["pausa_max"]
+CORTA_MIN = _p["corta_min"]
+CORTA_MAX = _p["corta_max"]
+TYPING_MS = _p["typing"]
 
 class LoginError(Exception):
     pass
@@ -55,8 +69,14 @@ class DetenerError(Exception):
     """Señal de parada solicitada por el usuario — cancela la orden y genera el reporte."""
     pass
 
-def pausa(minimo=0.8, maximo=2.0):
-    time.sleep(random.uniform(minimo, maximo))
+def pausa(minimo=None, maximo=None):
+    time.sleep(random.uniform(
+        minimo if minimo is not None else PAUSA_MIN,
+        maximo if maximo is not None else PAUSA_MAX,
+    ))
+
+def pausa_corta():
+    time.sleep(random.uniform(CORTA_MIN, CORTA_MAX))
 
 def check_stop():
     if STOP_FLAG.exists():
@@ -71,7 +91,7 @@ def leer_pacientes():
 def login(page):
     print("[1/3] Abriendo PAMI...")
     page.goto("https://efectoresweb.pami.org.ar/EfectoresWeb/login.isp")
-    page.wait_for_timeout(2000)
+    page.wait_for_selector('input[type="text"]', timeout=15000)
 
     print("[2/3] Iniciando sesión...")
     page.locator('input[type="text"]').first.fill(USUARIO)
@@ -86,7 +106,6 @@ def login(page):
         pass  # no apareció el error → login exitoso
 
     print("[2/3] Login exitoso.")
-    page.wait_for_timeout(1000)
 
 def ir_a_ambulatorio(page):
     print("[3/3] Navegando a Prestaciones Ambulatorias...")
@@ -110,8 +129,8 @@ def cargar_afiliado(page, beneficio, parentesco):
     page.locator("#zk_comp_153").click()
     page.locator("#zk_comp_153").press("Control+a")
     page.locator("#zk_comp_153").press("Delete")
-    page.locator("#zk_comp_153").type(beneficio, delay=80)  # simula tipeo humano
-    pausa(0.5, 1.0)
+    page.locator("#zk_comp_153").type(beneficio, delay=TYPING_MS)
+    pausa_corta()
 
     cod_parentesco = parentesco.split(" - ")[0] if " - " in parentesco else parentesco
     cod_parentesco = cod_parentesco.strip().zfill(2)  # garantiza 2 dígitos: "1" → "01"
@@ -123,7 +142,7 @@ def cargar_afiliado(page, beneficio, parentesco):
     except PWTimeout:
         raise OrdenError(f"El selector de parentesco no apareció (beneficio: '{beneficio}'). La página puede estar lenta.")
     parentesco_btn.click()
-    pausa(0.5, 1.0)
+    pausa_corta()
 
     dropdown = page.locator(".z-combobox-popup.z-combobox-open")
     try:
@@ -134,7 +153,7 @@ def cargar_afiliado(page, beneficio, parentesco):
     items_parentesco = dropdown.locator(".z-comboitem-text", has_text=re.compile(rf"^{cod_parentesco}"))
     if items_parentesco.count() == 0:
         page.keyboard.press("Escape")
-        pausa(0.5, 1.0)
+        pausa_corta()
         raise OrdenError(f"Código de parentesco '{cod_parentesco}' no encontrado en PAMI (beneficio: '{beneficio}').")
     items_parentesco.first.click()
     pausa()
@@ -162,7 +181,7 @@ def cargar_fecha(page, fecha_str):
         popup.wait_for(state="visible", timeout=10000)
     except PWTimeout:
         raise OrdenError(f"El calendario de fechas no se abrió al cargar la fecha '{fecha_str}'.")
-    pausa(0.5, 1.0)
+    pausa_corta()
 
     # El calendario abre siempre en el mes actual — calculamos cuántos meses navegar
     hoy  = date.today()
@@ -171,11 +190,11 @@ def cargar_fecha(page, fecha_str):
     if diff < 0:
         for _ in range(abs(diff)):
             popup.locator("[id$='-left']").click()
-            page.wait_for_timeout(700)
+            time.sleep(0.25)  # re-render local del DOM, sin network — mínimo fijo
     elif diff > 0:
         for _ in range(diff):
             popup.locator("[id$='-right']").click()
-            page.wait_for_timeout(700)
+            time.sleep(0.25)
 
     # Clickeamos el día exacto, excluyendo días del mes adyacente
     popup.locator("td.z-calendar-cell:not(.z-calendar-outside)").filter(
@@ -186,7 +205,7 @@ def cargar_fecha(page, fecha_str):
     try:
         page.wait_for_selector("text=La fecha/hora de la prestación no puede superar", timeout=2000)
         page.locator(".z-messagebox-button").click()
-        pausa(0.5, 1.0)
+        pausa_corta()
         raise OrdenError(f"La fecha {fecha_str} supera la fecha actual. PAMI no permite cargar fechas futuras.")
     except PWTimeout:
         pass  # fecha válida
@@ -196,9 +215,13 @@ def cargar_fecha(page, fecha_str):
 def cargar_profesional(page):
     print("  Profesional actuante...")
     page.locator("#zk_comp_380-btn").click()
-    pausa(0.5, 1.0)
+    try:
+        page.locator("#zk_comp_382").wait_for(state="visible", timeout=8000)
+    except PWTimeout:
+        raise OrdenError("El panel de selección de profesional no respondió.")
+    pausa_corta()
     page.locator("#zk_comp_382").click()
-    pausa()
+    pausa_corta()
 
 # ── Diagnóstico ───────────────────────────────────────────────────────────────
 
@@ -216,17 +239,23 @@ def cargar_diagnostico(page, cod_diagnostico):
     popup.locator("#zk_comp_236").click()
     popup.locator("#zk_comp_236").press("Control+a")
     popup.locator("#zk_comp_236").press("Delete")
-    popup.locator("#zk_comp_236").type(cod_diagnostico, delay=80)
-    pausa(0.5, 1.0)
+    popup.locator("#zk_comp_236").type(cod_diagnostico, delay=TYPING_MS)
+    pausa_corta()
 
     popup.get_by_role("button", name="Buscar").click()
-    pausa(1.5, 3.0)
+    try:
+        popup.locator(".z-listitem").first.wait_for(state="visible", timeout=12000)
+    except PWTimeout:
+        page.keyboard.press("Escape")
+        pausa_corta()
+        raise DiagnosticoNoEncontrado(f"Código de diagnóstico '{cod_diagnostico.upper()}' no encontrado.")
+    pausa_corta()
 
     items = popup.locator(".z-listitem")
     primer_cod = items.first.locator(".z-listcell").first.inner_text().strip() if items.count() > 0 else ""
     if primer_cod != cod_diagnostico.upper():
         page.keyboard.press("Escape")
-        pausa(0.5, 1.0)
+        pausa_corta()
         raise DiagnosticoNoEncontrado(f"Código de diagnóstico '{cod_diagnostico.upper()}' no encontrado.")
 
     items.first.click()
@@ -248,27 +277,33 @@ def cargar_practica(page, cod_practica):
         popup.wait_for(state="visible", timeout=10000)
     except PWTimeout:
         raise OrdenError(f"El panel de búsqueda de prácticas no se abrió al cargar '{cod_practica}'.")
-    pausa(0.5, 1.0)
+    pausa_corta()
 
     # Escribir el código simulando tipeo humano
     campo = popup.locator("#zk_comp_285")
     campo.click()
     campo.press("Control+a")
     campo.press("Delete")
-    campo.type(cod_practica, delay=80)
+    campo.type(cod_practica, delay=TYPING_MS)
     campo.press("Enter")
-    pausa(1.5, 3.0)
+    try:
+        popup.locator(".z-listitem").first.wait_for(state="visible", timeout=12000)
+    except PWTimeout:
+        page.keyboard.press("Escape")
+        pausa_corta()
+        raise PracticaNoEncontrada(f"Código de práctica '{cod_practica}' no encontrado.")
+    pausa_corta()
 
     # Verificar que el primer resultado sea coincidencia exacta (el buscador hace match parcial)
     items = popup.locator(".z-listitem")
     primer_cod = items.first.locator(".z-listcell").first.inner_text().strip() if items.count() > 0 else ""
     if primer_cod != cod_practica:
         page.keyboard.press("Escape")
-        pausa(0.5, 1.0)
+        pausa_corta()
         raise PracticaNoEncontrada(f"Código de práctica '{cod_practica}' no encontrado.")
 
     items.first.click()
-    pausa()
+    pausa_corta()
 
     # Hora: forzamos 00:00 seleccionando todo y escribiendo
     hora = page.locator("#zk_comp_303-real")
@@ -277,36 +312,36 @@ def cargar_practica(page, cod_practica):
     page.keyboard.type("00")       # horas
     hora.press("ArrowRight")
     page.keyboard.type("00")       # minutos
-    pausa(0.3, 0.5)
+    pausa_corta()
 
     # Cantidad: 1
     page.locator("#zk_comp_306").click()
     page.locator("#zk_comp_306").fill("1")
-    pausa(0.3, 0.5)
+    pausa_corta()
 
     # Modalidad: Afiliado Propio — selección por texto para no depender del ID del item
     page.locator("#zk_comp_308-real").click()
-    pausa(0.3, 0.5)
+    pausa_corta()
     page.locator("#zk_comp_308-btn").click()
-    pausa(0.5, 1.0)
+    pausa_corta()
     modal_dropdown = page.locator(".z-combobox-popup.z-combobox-open")
     try:
         modal_dropdown.wait_for(state="visible", timeout=5000)
     except PWTimeout:
         raise OrdenError(f"El dropdown de modalidad no se abrió para práctica '{cod_practica}'.")
     modal_dropdown.locator(".z-comboitem-text", has_text="AFILIADO PROPIO").click()
-    pausa()
+    pausa_corta()
 
     # Agregar
     page.locator("#zk_comp_313").click()
-    pausa(1.0, 2.0)
+    pausa()
 
     # Cerrar popup de validación si aparece (ej: "Debe seleccionar una modalidad")
     err_popup = page.locator(".z-messagebox")
     if err_popup.is_visible():
         mensaje = err_popup.locator(".z-messagebox-cnt").inner_text().strip()
         page.locator(".z-messagebox-button").click()
-        pausa(0.5, 1.0)
+        pausa_corta()
         raise OrdenError(f"Error al agregar práctica '{cod_practica}': {mensaje}")
 
 # ── Orden completa ────────────────────────────────────────────────────────────
@@ -323,7 +358,7 @@ def nueva_orden(page, fila):
         page.wait_for_selector("#zk_comp_130-btn", state="visible", timeout=20000)
     except PWTimeout:
         raise OrdenError("El formulario de alta no se cargó tras hacer clic en ALTA. La página puede estar lenta.")
-    pausa(1.0, 2.0)
+    pausa()
 
     try:
         cargar_afiliado(page, fila["Beneficio"], fila["Parentesco"])
@@ -342,7 +377,7 @@ def nueva_orden(page, fila):
         for i, cod in enumerate(practicas):
             if i > 0:
                 page.locator("#zk_comp_279-cave").click()
-                pausa(0.3, 0.6)
+                pausa_corta()
             cargar_practica(page, cod)
             check_stop()
     except Exception:
@@ -371,7 +406,7 @@ def nueva_orden(page, fila):
             raise OrdenError("La orden fue enviada pero PAMI no confirmó el resultado. Verificá manualmente si quedó registrada.")
         if loc_duplicado.is_visible():
             page.locator(".z-messagebox-button").click()  # cerrar popup duplicado
-            pausa(0.5, 1.0)
+            pausa_corta()
             cancelar_orden(page)
             raise SesionDuplicada("Ya existe una orden para este afiliado/profesional en esa fecha.")
         print(f"  -> OK: beneficio {fila['Beneficio']}")
@@ -381,7 +416,7 @@ def nueva_orden(page, fila):
 def run(playwright: Playwright) -> None:
     df = leer_pacientes()
 
-    browser = playwright.chromium.launch(headless=HEADLESS, slow_mo=300)
+    browser = playwright.chromium.launch(headless=HEADLESS, slow_mo=SLOW_MO)
     context = browser.new_context()
     page    = context.new_page()
 
@@ -408,6 +443,7 @@ def run(playwright: Playwright) -> None:
                         "beneficio": fila_pend.Beneficio,
                         "estado":    "DETENIDO",
                         "motivo":    "Detenido por el usuario",
+                        "_df_idx":   fila_pend.Index,
                     })
                 break
 
@@ -418,7 +454,7 @@ def run(playwright: Playwright) -> None:
                 fecha_fila = pd.to_datetime(fila["Fecha"].strip(), dayfirst=True).date()
                 if fecha_fila > date.today():
                     print(f"  [OMITIDO] Fecha futura: {fila['Fecha']}")
-                    resultados.append({"beneficio": beneficio, "estado": "OMITIDO", "motivo": f"Fecha futura: {fila['Fecha']}"})
+                    resultados.append({"beneficio": beneficio, "estado": "OMITIDO", "motivo": f"Fecha futura: {fila['Fecha']}", "_df_idx": idx})
                     continue
             except Exception:
                 pass
@@ -426,25 +462,65 @@ def run(playwright: Playwright) -> None:
             try:
                 nueva_orden(page, fila)
                 estado = "PRUEBA" if DRY_RUN else "OK"
-                resultados.append({"beneficio": beneficio, "estado": estado, "motivo": ""})
+                resultados.append({"beneficio": beneficio, "estado": estado, "motivo": "", "_df_idx": idx})
             except DetenerError:
                 print(f"  [DETENIDO] Parada solicitada — orden {beneficio} cancelada.")
-                resultados.append({"beneficio": beneficio, "estado": "DETENIDO", "motivo": "Detenido por el usuario"})
+                resultados.append({"beneficio": beneficio, "estado": "DETENIDO", "motivo": "Detenido por el usuario", "_df_idx": idx})
                 for fila_pend in df.iloc[idx + 1:].itertuples():
                     resultados.append({
                         "beneficio": fila_pend.Beneficio,
                         "estado":    "DETENIDO",
                         "motivo":    "Detenido por el usuario",
+                        "_df_idx":   fila_pend.Index,
                     })
                 detenido = True
                 STOP_FLAG.unlink(missing_ok=True)
                 break
             except OrdenError as e:
                 print(f"  [FALLO] {e}")
-                resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": str(e)})
+                resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": str(e), "_df_idx": idx})
             except Exception as e:
                 print(f"  [ERROR INESPERADO] {e}")
-                resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": f"Error inesperado: {e}"})
+                resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": f"Error inesperado: {e}", "_df_idx": idx})
+
+        if not detenido and RETRIES > 0:
+            a_reintentar = [
+                (i, df.loc[r["_df_idx"]])
+                for i, r in enumerate(resultados)
+                if r["estado"] == "ERROR"
+            ]
+            if a_reintentar:
+                linea_sep = "─" * 50
+                print(f"\n{linea_sep}")
+                print(f"REINTENTANDO {len(a_reintentar)} fila(s) con error...")
+                print(linea_sep)
+                try:
+                    ir_a_ambulatorio(page)
+                except Exception as e:
+                    print(f"  [AVISO] No se pudo navegar a ambulatorio antes del reintento: {e}. Se omiten reintentos.")
+                    a_reintentar = []
+                for res_idx, fila_r in a_reintentar:
+                    if STOP_FLAG.exists():
+                        STOP_FLAG.unlink(missing_ok=True)
+                        break
+                    beneficio_r = fila_r["Beneficio"]
+                    print(f"\n=== [REINTENTO] Beneficio {beneficio_r} ===")
+                    try:
+                        nueva_orden(page, fila_r)
+                        resultados[res_idx]["estado"] = "PRUEBA" if DRY_RUN else "OK"
+                        resultados[res_idx]["motivo"] = "Recuperado en reintento"
+                    except SesionDuplicada:
+                        resultados[res_idx]["estado"] = "PRUEBA" if DRY_RUN else "OK"
+                        resultados[res_idx]["motivo"] = "Primer intento guardado (detectado por duplicado en reintento)"
+                    except LoginError as e:
+                        print(f"  [SESIÓN EXPIRADA] {e} — se interrumpen los reintentos.")
+                        break
+                    except DetenerError:
+                        STOP_FLAG.unlink(missing_ok=True)
+                        break
+                    except Exception as e:
+                        resultados[res_idx]["motivo"] += f" | Reintento: {e}"
+                        print(f"  [REINTENTO FALLIDO] {e}")
 
         if detenido:
             print("REPORTE PARCIAL — procesamiento detenido antes de completar.")

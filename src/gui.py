@@ -44,7 +44,10 @@ STOP_FLAG         = DATA_DIR / "stop.flag"
 DEFAULT_PRACTICAS    = ["250101", "250102"]
 DIAS_NOMBRES         = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
 COLUMNAS_REQUERIDAS  = {"Beneficio", "Parentesco", "Fecha", "Cod_Diagnostico"}
-LOG_ERROR_KEYWORDS   = ("[FALLO]", "[ERROR", "[AVISO]", "[OMITIDO]", "[DETENIDO]")
+LOG_ERROR_KEYWORDS   = (
+    "[FALLO]", "[ERROR", "[AVISO]", "[OMITIDO]", "[DETENIDO]",
+    "[REINTENTO]", "REPORTE PARCIAL", "Total:",
+)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -667,8 +670,8 @@ class App(ctk.CTk):
 
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(3, weight=2)  # tabla crece más
-        self.grid_rowconfigure(9, weight=1)  # log crece menos
+        self.grid_rowconfigure(3, weight=2)   # tabla crece más
+        self.grid_rowconfigure(10, weight=1)  # log crece menos
 
         # ── Título
         ctk.CTkLabel(self, text="PAMI — Carga de Órdenes",
@@ -733,11 +736,25 @@ class App(ctk.CTk):
                         variable=self.dry_run_var,
                         text_color="#e67e22",
                         fg_color="#e67e22", hover_color="#ca6f1e",
-                        checkmark_color="white").pack(side="left")
+                        checkmark_color="white").pack(side="left", padx=(0, 16))
+
+        self.retry_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(frame_bot, text="Reintentar errores",
+                        variable=self.retry_var).pack(side="left")
+
+        # ── Velocidad
+        frame_vel = ctk.CTkFrame(self, fg_color="transparent")
+        frame_vel.grid(row=7, column=0, pady=(0, 4))
+        ctk.CTkLabel(frame_vel, text="Velocidad:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 8))
+        self.speed_var = ctk.StringVar(value="Normal")
+        ctk.CTkSegmentedButton(frame_vel,
+                               values=["Cauteloso", "Normal", "Rapido"],
+                               variable=self.speed_var,
+                               width=220).pack(side="left")
 
         # ── Barra de progreso
         self.frame_progreso = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_progreso.grid(row=7, column=0, sticky="ew", padx=20, pady=(4, 2))
+        self.frame_progreso.grid(row=8, column=0, sticky="ew", padx=20, pady=(4, 2))
         self.frame_progreso.columnconfigure(0, weight=1)
         self.frame_progreso.columnconfigure(1, weight=0)
 
@@ -759,7 +776,7 @@ class App(ctk.CTk):
 
         # ── Log
         frame_log_header = ctk.CTkFrame(self, fg_color="transparent")
-        frame_log_header.grid(row=8, column=0, sticky="ew", padx=20, pady=(10,2))
+        frame_log_header.grid(row=9, column=0, sticky="ew", padx=20, pady=(10,2))
         ctk.CTkLabel(frame_log_header, text="Log:", anchor="w").pack(side="left")
         ctk.CTkButton(frame_log_header, text="Limpiar", width=70, height=22,
                       fg_color="transparent", border_width=1, hover_color="#444",
@@ -771,7 +788,7 @@ class App(ctk.CTk):
                         variable=self._solo_errores_var,
                         command=self._aplicar_filtro_log).pack(side="right", padx=(0, 12))
         self.log = ctk.CTkTextbox(self, height=120, state="disabled")
-        self.log.grid(row=9, column=0, sticky="nsew", padx=20, pady=(0,15))
+        self.log.grid(row=10, column=0, sticky="nsew", padx=20, pady=(0,15))
 
         self._set_excel_activo(self._excel_activo)
 
@@ -957,7 +974,7 @@ class App(ctk.CTk):
         self.btn_ejecutar.configure(state="disabled")
         self.btn_detener.configure(state="normal", text="Detener")
         self.btn_detener.grid(row=0, column=1, padx=(10, 0))
-        self.frame_progreso.grid()
+        self.frame_progreso.grid(row=8, column=0, sticky="ew", padx=20, pady=(4, 2))
         self.progress_bar.set(0)
         self.progress_label.configure(text="", text_color="gray60")
         partes_modo = []
@@ -965,6 +982,10 @@ class App(ctk.CTk):
             partes_modo.append("browser oculto")
         if self.dry_run_var.get():
             partes_modo.append("modo prueba")
+        if self.retry_var.get():
+            partes_modo.append("reintentar errores")
+        if self.speed_var.get() != "Normal":
+            partes_modo.append(f"vel. {self.speed_var.get().lower()}")
         sufijo_modo = f" [{', '.join(partes_modo)}]" if partes_modo else ""
         self.log_append(f"Iniciando bot{sufijo_modo}...\n")
         env = os.environ.copy()
@@ -973,6 +994,8 @@ class App(ctk.CTk):
         env["PAMI_EXCEL"]       = str(self._excel_activo)
         env["PAMI_DRY_RUN"]     = "1" if self.dry_run_var.get() else ""
         env["PAMI_HEADLESS"]    = "1" if self.headless_var.get() else ""
+        env["PAMI_RETRIES"]     = "1" if self.retry_var.get() else "0"
+        env["PAMI_SPEED"]       = self.speed_var.get().lower()
         env["PYTHONUNBUFFERED"] = "1"
 
         def correr():
