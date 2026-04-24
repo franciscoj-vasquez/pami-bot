@@ -1,3 +1,7 @@
+# Build / distribución
+build/
+dist/
+
 # Credenciales y datos sensibles
 .env
 pacientes.xlsx
