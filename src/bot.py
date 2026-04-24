@@ -467,8 +467,11 @@ def run(playwright: Playwright) -> None:
                     print(f"  [OMITIDO] Fecha futura: {fila['Fecha']}")
                     resultados.append({"beneficio": beneficio, "estado": "OMITIDO", "motivo": f"Fecha futura: {fila['Fecha']}", "_df_idx": idx})
                     continue
-            except Exception:
-                pass
+            except ValueError:
+                motivo = f"Formato de fecha inválido: '{fila.get('Fecha')}'. Se esperaba DD/MM/AAAA."
+                print(f"  [FALLO] {motivo}")
+                resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": motivo, "_df_idx": idx, "permanente": True})
+                continue
 
             try:
                 nueva_orden(page, fila)
@@ -498,7 +501,7 @@ def run(playwright: Playwright) -> None:
             a_reintentar = [
                 (i, df.loc[r["_df_idx"]])
                 for i, r in enumerate(resultados)
-                if r["estado"] == "ERROR"
+                if r["estado"] == "ERROR" and not r.get("permanente")
             ]
             if a_reintentar:
                 linea_sep = "-" * 50

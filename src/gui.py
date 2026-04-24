@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+from collections import deque
 import winreg
 import pandas as pd
 from datetime import datetime, timedelta
@@ -658,7 +659,7 @@ class App(ctk.CTk):
         self._excel_activo  = cargar_excel_activo()
         self._proc          = None
         self._hide_after_id = None
-        self._log_lines:    list[str] = []
+        self._log_lines:    deque[str] = deque(maxlen=10_000)
 
         self._build_ui()
 
@@ -898,9 +899,10 @@ class App(ctk.CTk):
             practicas = p.get("practicas", DEFAULT_PRACTICAS)
             futuras = [f for f in fechas if f > hoy]
             if futuras:
-                por_beneficio[p["beneficio"]] = futuras
-            for fecha in fechas:
+                por_beneficio.setdefault(p["beneficio"], []).extend(futuras)
+            for num, fecha in enumerate(fechas, 1):
                 fila = {
+                    "Sesión":          num,
                     "Beneficio":       p["beneficio"],
                     "Parentesco":      p["parentesco"],
                     "Fecha":           fecha.strftime("%d/%m/%Y"),
