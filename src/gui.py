@@ -649,8 +649,8 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("PAMI - Carga de Órdenes")
-        self.geometry("700x580")
-        self.minsize(700, 580)
+        self.geometry("700x550")
+        self.minsize(700, 550)
         self.resizable(True, True)
 
         self.usuario        = keyring.get_password(KEYRING_SERVICE, "usuario") or ""
@@ -660,8 +660,18 @@ class App(ctk.CTk):
         self._proc          = None
         self._hide_after_id = None
         self._log_lines:    deque[str] = deque(maxlen=10_000)
+        self._log_visible   = False
+        self._log_file      = open(DATA_DIR / "bot.log", "a", encoding="utf-8", buffering=1)
+        self._log_file.write(
+            f"\n{'=' * 60}\n"
+            f"Sesión iniciada: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"{'=' * 60}\n"
+        )
 
         self._build_ui()
+        self.bind_all("<Control-Shift-l>", self._toggle_log)
+        self.bind_all("<Control-L>",       self._toggle_log)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         if self.pacientes:
             self.actualizar_tabla()
@@ -775,21 +785,24 @@ class App(ctk.CTk):
         self.btn_detener.grid(row=0, column=1, padx=(10, 0))
         self.frame_progreso.grid_remove()
 
-        # ── Log
-        frame_log_header = ctk.CTkFrame(self, fg_color="transparent")
-        frame_log_header.grid(row=9, column=0, sticky="ew", padx=20, pady=(10,2))
-        ctk.CTkLabel(frame_log_header, text="Log:", anchor="w").pack(side="left")
-        ctk.CTkButton(frame_log_header, text="Limpiar", width=70, height=22,
+        # ── Log (oculto por defecto; Ctrl+Shift+L para mostrar/ocultar)
+        self._frame_log_header = ctk.CTkFrame(self, fg_color="transparent")
+        self._frame_log_header.grid(row=9, column=0, sticky="ew", padx=20, pady=(10,2))
+        ctk.CTkLabel(self._frame_log_header, text="Log:", anchor="w").pack(side="left")
+        ctk.CTkButton(self._frame_log_header, text="Limpiar", width=70, height=22,
                       fg_color="transparent", border_width=1, hover_color="#444",
                       font=ctk.CTkFont(size=11),
                       command=self._limpiar_log).pack(side="right")
         self._solo_errores_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(frame_log_header, text="Solo errores", width=110, height=22,
+        ctk.CTkCheckBox(self._frame_log_header, text="Solo errores", width=110, height=22,
                         font=ctk.CTkFont(size=11),
                         variable=self._solo_errores_var,
                         command=self._aplicar_filtro_log).pack(side="right", padx=(0, 12))
         self.log = ctk.CTkTextbox(self, height=120, state="disabled")
         self.log.grid(row=10, column=0, sticky="nsew", padx=20, pady=(0,15))
+        self._frame_log_header.grid_remove()
+        self.log.grid_remove()
+        self.grid_rowconfigure(10, weight=0)
 
         self._set_excel_activo(self._excel_activo)
 
@@ -1094,6 +1107,27 @@ class App(ctk.CTk):
         self._hide_after_id = None
         self.frame_progreso.grid_remove()
 
+    def _toggle_log(self, _=None):
+        self._log_visible = not self._log_visible
+        if self._log_visible:
+            self._frame_log_header.grid()
+            self.log.grid()
+            self.grid_rowconfigure(10, weight=1)
+            self.minsize(700, 710)
+            if self.winfo_height() < 710:
+                self.geometry(f"{self.winfo_width()}x710")
+        else:
+            self._frame_log_header.grid_remove()
+            self.log.grid_remove()
+            self.grid_rowconfigure(10, weight=0)
+            self.minsize(700, 550)
+            if self.state() != "zoomed":
+                self.geometry(f"{self.winfo_width()}x550")
+
+    def _on_close(self):
+        self._log_file.close()
+        self.destroy()
+
     def _detener_bot(self):
         if not STOP_FLAG.exists():
             # Primer clic: parada cooperativa — el bot termina el paso actual y genera el reporte
@@ -1126,6 +1160,7 @@ class App(ctk.CTk):
 
     def log_append(self, texto):
         self._log_lines.append(texto)
+        self._log_file.write(texto)
         if self._solo_errores_var.get() and not any(k in texto for k in LOG_ERROR_KEYWORDS):
             return
         self.log.configure(state="normal")
