@@ -996,7 +996,8 @@ class App(ctk.CTk):
         env["PAMI_HEADLESS"]    = "1" if self.headless_var.get() else ""
         env["PAMI_RETRIES"]     = "1" if self.retry_var.get() else "0"
         env["PAMI_SPEED"]       = self.speed_var.get().lower()
-        env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONUNBUFFERED"]  = "1"
+        env["PYTHONIOENCODING"]  = "utf-8"
 
         def correr():
             resumen = {"ok": 0, "omit": 0, "det": 0, "err": 0, "reporte": None, "detenido": False, "reporte_error": False}

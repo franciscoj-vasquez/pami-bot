@@ -69,6 +69,13 @@ class DetenerError(Exception):
     """Señal de parada solicitada por el usuario — cancela la orden y genera el reporte."""
     pass
 
+def _motivo_limpio(e: Exception) -> str:
+    """Mensaje de error sin detalles técnicos de Playwright, apto para el reporte Excel."""
+    if isinstance(e, PWTimeout):
+        return "La página no respondió a tiempo. Reintentá o verificá el estado del sitio PAMI."
+    primera_linea = str(e).split("\n")[0].strip()
+    return (primera_linea[:160] + "…") if len(primera_linea) > 160 else primera_linea
+
 def pausa(minimo=None, maximo=None):
     time.sleep(random.uniform(
         minimo if minimo is not None else PAUSA_MIN,
@@ -175,13 +182,14 @@ def cargar_fecha(page, fecha_str):
     print(f"  Fecha: {fecha_str}")
     fecha = pd.to_datetime(fecha_str.strip(), dayfirst=True).to_pydatetime()
 
+    time.sleep(0.6)  # esperar que la página termine de procesar el paso anterior antes de abrir el calendario
     page.locator("#zk_comp_128-real").click()
     popup = page.locator("#zk_comp_128-pp")
     try:
         popup.wait_for(state="visible", timeout=10000)
     except PWTimeout:
         raise OrdenError(f"El calendario de fechas no se abrió al cargar la fecha '{fecha_str}'.")
-    time.sleep(0.3)  # esperar render inicial del calendario — fijo, independiente del perfil
+    time.sleep(0.6)  # esperar render inicial del calendario — fijo, independiente del perfil
 
     # El calendario abre siempre en el mes actual — calculamos cuántos meses navegar
     hoy  = date.today()
@@ -483,7 +491,7 @@ def run(playwright: Playwright) -> None:
                 resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": str(e), "_df_idx": idx})
             except Exception as e:
                 print(f"  [ERROR INESPERADO] {e}")
-                resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": f"Error inesperado: {e}", "_df_idx": idx})
+                resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": f"Error inesperado: {_motivo_limpio(e)}", "_df_idx": idx})
 
         if not detenido and RETRIES > 0:
             a_reintentar = [
@@ -492,7 +500,7 @@ def run(playwright: Playwright) -> None:
                 if r["estado"] == "ERROR"
             ]
             if a_reintentar:
-                linea_sep = "─" * 50
+                linea_sep = "-" * 50
                 print(f"\n{linea_sep}")
                 print(f"REINTENTANDO {len(a_reintentar)} fila(s) con error...")
                 print(linea_sep)
@@ -521,7 +529,7 @@ def run(playwright: Playwright) -> None:
                         STOP_FLAG.unlink(missing_ok=True)
                         break
                     except Exception as e:
-                        resultados[res_idx]["motivo"] += f" | Reintento: {e}"
+                        resultados[res_idx]["motivo"] += f" | Reintento: {_motivo_limpio(e)}"
                         print(f"  [REINTENTO FALLIDO] {e}")
 
         if detenido:
