@@ -19,7 +19,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DisableProgramGroupPage=yes
 LicenseFile=license.rtf
 OutputDir=..\dist
-OutputBaseFilename=KINETICA_Instalador_v{#MyAppVersion}
+OutputBaseFilename=KINETICA_setup
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -62,6 +62,13 @@ Filename: "{app}\bot_runner.exe"; \
 Filename: "{app}\{#MyAppExeName}"; \
   Description: "Iniciar {#MyAppName}"; \
   Flags: nowait postinstall skipifsilent;
+
+[Code]
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    SaveStringToFile(ExpandConstant('{app}\version.txt'), '{#MyAppVersion}', False);
+end;
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"

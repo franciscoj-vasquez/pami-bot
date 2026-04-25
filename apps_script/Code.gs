@@ -1,25 +1,10 @@
 /**
- * KINETICA — Servidor de Licencias (Google Apps Script)
+ * KINETICA — Servidor de Licencias y Actualizaciones (Google Apps Script)
  *
- * ═══════════════════════════════════════════════════════════════════════
- *  GESTIÓN DE LICENCIAS
- * ═══════════════════════════════════════════════════════════════════════
+ * doPost — verificación de licencias        (hoja: "licencias")
+ * doGet  — consulta de versión disponible   (hoja: "config")
  *
- *  Agregar cliente:
- *    - Generá una clave con tools/generar_key.py
- *    - Agregá una fila: key | nombre del cliente | YYYY-MM-DD | (vacío) | (vacío) | notas
- *    - Dejá machine_id y activado_en en blanco; se completan solos la primera vez que el
- *      cliente ejecuta la app.
- *
- *  Renovar licencia:
- *    - Modificá la columna "expiracion" con la nueva fecha (YYYY-MM-DD).
- *
- *  Cliente cambió de computadora:
- *    - Borrá las celdas machine_id y activado_en de ese cliente.
- *    - La próxima vez que abra la app, se registrará la nueva máquina.
- *
- *  Revocar licencia:
- *    - Cambiá "expiracion" a una fecha pasada (ej: 2000-01-01).
+ * Ver docs/licencias.md y docs/actualizaciones.md para el workflow completo.
  */
 
 // ── Constantes de columnas (base 1) ──────────────────────────────────────────
@@ -31,7 +16,39 @@ var COL_ACTIVADO   = 5;
 var COL_NOTAS      = 6;
 var SHEET_NAME     = "licencias";
 
-// ── Punto de entrada HTTP POST ────────────────────────────────────────────────
+// ── Punto de entrada HTTP GET — consulta de versión ──────────────────────────
+
+function doGet(e) {
+  try {
+    var ss    = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("config");
+    if (!sheet) {
+      return _respond({ error: "config_not_found" });
+    }
+
+    var values = sheet.getDataRange().getValues();
+    var config = {};
+    for (var i = 0; i < values.length; i++) {
+      var key = String(values[i][0]).trim();
+      var val = String(values[i][1]).trim();
+      if (key) config[key] = val;
+    }
+
+    var version     = config["version"]      || "0.0.0";
+    var downloadUrl = config["download_url"] || "";
+
+    if (!version || !downloadUrl) {
+      return _respond({ error: "config_incomplete" });
+    }
+
+    return _respond({ version: version, download_url: downloadUrl });
+
+  } catch (err) {
+    return _respond({ error: err.toString() });
+  }
+}
+
+// ── Punto de entrada HTTP POST — verificación de licencia ─────────────────────
 
 function doPost(e) {
   try {

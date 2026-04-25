@@ -16,8 +16,14 @@ from pathlib import Path
 from tkinter import messagebox
 
 import queue as _queue
+import requests
 
 import licencia as _lic
+
+try:
+    from _config import LICENSE_ENDPOINT as _UPDATE_ENDPOINT
+except ImportError:
+    _UPDATE_ENDPOINT = ""
 
 KEYRING_SERVICE = "pami_bot"
 
@@ -851,6 +857,118 @@ class LicenseDialog(ctk.CTkToplevel):
         self.destroy()
 
 
+# ── Diálogo: Descarga de actualización ───────────────────────────────────────
+
+class UpdateDialog(ctk.CTkToplevel):
+    """Descarga el nuevo instalador y lo lanza en modo silencioso."""
+
+    _TEMP = Path(os.environ.get("TEMP", Path.home())) / "KINETICA_setup.exe"
+
+    def __init__(self, parent, download_url: str):
+        super().__init__(parent)
+        self._parent       = parent
+        self._download_url = download_url
+
+        self.title("Actualizando KINETICA")
+        self.geometry("380x160")
+        self.resizable(False, False)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", lambda: None)  # no se puede cerrar mientras descarga
+
+        ctk.CTkLabel(self, text="Descargando actualización…",
+                     font=ctk.CTkFont(size=13)).pack(pady=(24, 8))
+        self._bar = ctk.CTkProgressBar(self, width=300)
+        self._bar.set(0)
+        self._bar.pack()
+        self._label_pct = ctk.CTkLabel(self, text="0 %", text_color="gray60")
+        self._label_pct.pack(pady=(6, 0))
+
+        threading.Thread(target=self._descargar, daemon=True).start()
+
+    def _descargar(self):
+        try:
+            resp = requests.get(self._download_url, stream=True, timeout=60)
+            resp.raise_for_status()
+            total    = int(resp.headers.get("content-length", 0))
+            descargado = 0
+            with open(self._TEMP, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=65536):
+                    if chunk:
+                        f.write(chunk)
+                        descargado += len(chunk)
+                        if total:
+                            pct = descargado / total
+                            self.after(0, lambda p=pct: self._actualizar_barra(p))
+            self.after(0, self._instalar)
+        except Exception as e:
+            self.after(0, lambda: self._error(str(e)))
+
+    def _actualizar_barra(self, pct: float):
+        self._bar.set(pct)
+        self._label_pct.configure(text=f"{int(pct * 100)} %")
+
+    def _instalar(self):
+        self._bar.set(1.0)
+        self._label_pct.configure(text="Instalando…")
+        try:
+            proc = subprocess.Popen(
+                [str(self._TEMP), "/SILENT", "/NORESTART", "/CLOSEAPPLICATIONS"],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except Exception as e:
+            self._error(f"No se pudo lanzar el instalador: {e}")
+            return
+
+        for w in self.winfo_children():
+            w.destroy()
+        self.geometry("380x180")
+        ctk.CTkLabel(self, text="Instalando actualización…",
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(28, 8))
+        self._spin = ctk.CTkProgressBar(self, mode="indeterminate", width=300)
+        self._spin.pack()
+        self._spin.start()
+        ctk.CTkLabel(self,
+                     text="No cerrés ni reabras la aplicación.",
+                     text_color="gray60").pack(pady=(10, 0))
+
+        threading.Thread(target=self._esperar_instalador, args=(proc,), daemon=True).start()
+
+    def _esperar_instalador(self, proc):
+        proc.wait()
+        self.after(0, self._parent.destroy)
+
+    def _error(self, msg: str):
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        for w in self.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(self, text="Error al descargar la actualización:",
+                     text_color="#e74c3c").pack(pady=(24, 4))
+        ctk.CTkLabel(self, text=msg, wraplength=340,
+                     text_color="gray60", font=ctk.CTkFont(size=11)).pack(padx=20)
+        ctk.CTkButton(self, text="Cerrar", width=100, command=self.destroy).pack(pady=16)
+        if hasattr(self._parent, "_banner_btn"):
+            self._parent.after(0, lambda: self._parent._banner_btn.configure(
+                state="normal", text="Actualizar"))
+
+
+# ── Actualización automática ──────────────────────────────────────────────────
+
+def _leer_version_local() -> str:
+    """Lee la versión instalada desde version.txt (junto al .exe). En dev devuelve '0.0.0'."""
+    if not getattr(sys, "frozen", False):
+        return "0.0.0"
+    try:
+        return (Path(sys.executable).parent / "version.txt").read_text(encoding="utf-8").strip()
+    except OSError:
+        return "0.0.0"
+
+def _ver(v: str) -> tuple:
+    try:
+        return tuple(int(x) for x in v.strip().split("."))
+    except ValueError:
+        return (0, 0, 0)
+
+
 # ── Ventana Principal ─────────────────────────────────────────────────────────
 
 class App(ctk.CTk):
@@ -887,19 +1005,37 @@ class App(ctk.CTk):
         if self.usuario:
             self.log_append(f"Credenciales cargadas para '{self.usuario}'.\n")
 
+        self.after(2000, self._arrancar_check_update)
+
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(3, weight=2)   # tabla crece más
-        self.grid_rowconfigure(10, weight=1)  # log crece menos
+        self.grid_rowconfigure(4, weight=2)   # tabla crece más
+        self.grid_rowconfigure(11, weight=1)  # log crece menos
 
         # ── Título
         ctk.CTkLabel(self, text="KINETICA — Carga de Órdenes PAMI",
                      font=ctk.CTkFont(size=18, weight="bold")).grid(
                      row=0, column=0, pady=(20,5))
 
+        # ── Banner de actualización (oculto por defecto)
+        self._banner_update = ctk.CTkFrame(self, fg_color="#1a3a1a", corner_radius=8)
+        self._banner_update.grid(row=1, column=0, sticky="ew", padx=30, pady=(0, 4))
+        self._banner_update.columnconfigure(0, weight=1)
+        self._banner_label = ctk.CTkLabel(
+            self._banner_update, text="",
+            text_color="#a8e6a8", font=ctk.CTkFont(size=12))
+        self._banner_label.grid(row=0, column=0, padx=16, pady=8, sticky="w")
+        self._banner_btn = ctk.CTkButton(
+            self._banner_update, text="Actualizar", width=100,
+            fg_color="#27ae60", hover_color="#1e8449",
+            command=self._iniciar_actualizacion)
+        self._banner_btn.grid(row=0, column=1, padx=(0, 12), pady=6)
+        self._banner_update.grid_remove()
+        self._update_info = None   # {"version": "x.y.z", "download_url": "..."}
+
         # ── Botones de configuración
         frame_config = ctk.CTkFrame(self, fg_color="transparent")
-        frame_config.grid(row=1, column=0, pady=5)
+        frame_config.grid(row=2, column=0, pady=5)
         ctk.CTkButton(frame_config, text="Credenciales",
                       command=self.abrir_credenciales).pack(side="left", padx=8)
         ctk.CTkButton(frame_config, text="Configurar días",
@@ -907,7 +1043,7 @@ class App(ctk.CTk):
 
         # ── Tabla de pacientes
         frame_tabla_header = ctk.CTkFrame(self, fg_color="transparent")
-        frame_tabla_header.grid(row=2, column=0, sticky="ew", padx=20, pady=(15,2))
+        frame_tabla_header.grid(row=3, column=0, sticky="ew", padx=20, pady=(15,2))
         ctk.CTkLabel(frame_tabla_header, text="Pacientes cargados:", anchor="w").pack(side="left")
         ctk.CTkButton(frame_tabla_header, text="Limpiar todo", width=90, height=22,
                       fg_color="transparent", border_width=1, hover_color="#444",
@@ -915,12 +1051,12 @@ class App(ctk.CTk):
                       command=self.limpiar_pacientes).pack(side="right")
 
         self.tabla_frame = ctk.CTkScrollableFrame(self, height=180)
-        self.tabla_frame.grid(row=3, column=0, sticky="nsew", padx=20)
+        self.tabla_frame.grid(row=4, column=0, sticky="nsew", padx=20)
         self._headers_tabla()
 
         # ── Botones de tabla (agregar, limpiar, generar)
         frame_tabla_btns = ctk.CTkFrame(self, fg_color="transparent")
-        frame_tabla_btns.grid(row=4, column=0, pady=(8, 4))
+        frame_tabla_btns.grid(row=5, column=0, pady=(8, 4))
         ctk.CTkButton(frame_tabla_btns, text="+ Agregar Paciente",
                       command=self.abrir_agregar_paciente).pack(side="left", padx=8)
         ctk.CTkButton(frame_tabla_btns, text="Generar Excel",
@@ -928,7 +1064,7 @@ class App(ctk.CTk):
 
         # ── Excel a procesar
         frame_excel = ctk.CTkFrame(self, fg_color="transparent")
-        frame_excel.grid(row=5, column=0, sticky="ew", padx=20, pady=(10, 2))
+        frame_excel.grid(row=6, column=0, sticky="ew", padx=20, pady=(10, 2))
         frame_excel.columnconfigure(1, weight=1)
         ctk.CTkLabel(frame_excel, text="Excel a procesar:", anchor="w").grid(
             row=0, column=0, padx=(0, 10))
@@ -938,12 +1074,19 @@ class App(ctk.CTk):
         self._excel_entry.grid(row=0, column=1, sticky="ew")
         ctk.CTkButton(frame_excel, text="...", width=36,
                       command=self._elegir_excel).grid(row=0, column=2, padx=(6, 0))
+        self._btn_limpiar_excel = ctk.CTkButton(
+            frame_excel, text="✕", width=28,
+            fg_color="#c0392b", hover_color="#922b21",
+            command=lambda: self._set_excel_activo(None))
+        self._btn_limpiar_excel.grid(row=0, column=3, padx=(4, 0))
+        self._btn_limpiar_excel.grid_remove()
 
         # ── Sección Ejecutar Bot + opciones
         frame_bot = ctk.CTkFrame(self, fg_color="transparent")
-        frame_bot.grid(row=6, column=0, pady=(14, 4))
-        self.btn_ejecutar = ctk.CTkButton(frame_bot, text="Ejecutar Bot", fg_color="#27ae60",
-                      hover_color="#1e8449", command=self.ejecutar_bot, state="disabled")
+        frame_bot.grid(row=7, column=0, pady=(14, 4))
+        self.btn_ejecutar = ctk.CTkButton(frame_bot, text="Ejecutar Bot",
+                      fg_color="#4a4a4a", hover_color="#4a4a4a",
+                      command=self.ejecutar_bot)
         self.btn_ejecutar.pack(side="left", padx=(8, 16))
 
         self.headless_var = ctk.BooleanVar(value=True)
@@ -963,7 +1106,7 @@ class App(ctk.CTk):
 
         # ── Velocidad
         frame_vel = ctk.CTkFrame(self, fg_color="transparent")
-        frame_vel.grid(row=7, column=0, pady=(0, 4))
+        frame_vel.grid(row=8, column=0, pady=(0, 4))
         ctk.CTkLabel(frame_vel, text="Velocidad:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 8))
         self.speed_var = ctk.StringVar(value="Normal")
         ctk.CTkSegmentedButton(frame_vel,
@@ -973,7 +1116,7 @@ class App(ctk.CTk):
 
         # ── Barra de progreso
         self.frame_progreso = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_progreso.grid(row=8, column=0, sticky="ew", padx=20, pady=(4, 2))
+        self.frame_progreso.grid(row=9, column=0, sticky="ew", padx=20, pady=(4, 2))
         self.frame_progreso.columnconfigure(0, weight=1)
         self.frame_progreso.columnconfigure(1, weight=0)
 
@@ -995,7 +1138,7 @@ class App(ctk.CTk):
 
         # ── Log (oculto por defecto; Ctrl+Shift+L para mostrar/ocultar)
         self._frame_log_header = ctk.CTkFrame(self, fg_color="transparent")
-        self._frame_log_header.grid(row=9, column=0, sticky="ew", padx=20, pady=(10,2))
+        self._frame_log_header.grid(row=10, column=0, sticky="ew", padx=20, pady=(10,2))
         ctk.CTkLabel(self._frame_log_header, text="Log:", anchor="w").pack(side="left")
         ctk.CTkButton(self._frame_log_header, text="Limpiar", width=70, height=22,
                       fg_color="transparent", border_width=1, hover_color="#444",
@@ -1007,10 +1150,10 @@ class App(ctk.CTk):
                         variable=self._solo_errores_var,
                         command=self._aplicar_filtro_log).pack(side="right", padx=(0, 12))
         self.log = ctk.CTkTextbox(self, height=120, state="disabled")
-        self.log.grid(row=10, column=0, sticky="nsew", padx=20, pady=(0,15))
+        self.log.grid(row=11, column=0, sticky="nsew", padx=20, pady=(0,15))
         self._frame_log_header.grid_remove()
         self.log.grid_remove()
-        self.grid_rowconfigure(10, weight=0)
+        self.grid_rowconfigure(11, weight=0)
 
         self._set_excel_activo(self._excel_activo)
 
@@ -1073,10 +1216,12 @@ class App(ctk.CTk):
             self._excel_entry.insert(0, path.name)
             self._excel_entry.configure(state="readonly")
             Tooltip(self._excel_entry, str(path))
-            self.btn_ejecutar.configure(state="normal")
+            self.btn_ejecutar.configure(fg_color="#27ae60", hover_color="#1e8449")
+            self._btn_limpiar_excel.grid()
         else:
             self._excel_entry.configure(state="readonly")
-            self.btn_ejecutar.configure(state="disabled")
+            self.btn_ejecutar.configure(fg_color="#4a4a4a", hover_color="#4a4a4a")
+            self._btn_limpiar_excel.grid_remove()
 
     def _elegir_excel(self):
         from tkinter import filedialog
@@ -1199,7 +1344,7 @@ class App(ctk.CTk):
         self.btn_ejecutar.configure(state="disabled")
         self.btn_detener.configure(state="normal", text="Detener")
         self.btn_detener.grid(row=0, column=1, padx=(10, 0))
-        self.frame_progreso.grid(row=8, column=0, sticky="ew", padx=20, pady=(4, 2))
+        self.frame_progreso.grid(row=9, column=0, sticky="ew", padx=20, pady=(4, 2))
         self.progress_bar.set(0)
         self.progress_label.configure(text="", text_color="gray60")
         partes_modo = []
@@ -1355,17 +1500,58 @@ class App(ctk.CTk):
         if self._log_visible:
             self._frame_log_header.grid()
             self.log.grid()
-            self.grid_rowconfigure(10, weight=1)
+            self.grid_rowconfigure(11, weight=1)
             self.minsize(700, 710)
             if self.winfo_height() < 710:
                 self.geometry(f"{self.winfo_width()}x710")
         else:
             self._frame_log_header.grid_remove()
             self.log.grid_remove()
-            self.grid_rowconfigure(10, weight=0)
+            self.grid_rowconfigure(11, weight=0)
             self.minsize(700, 550)
             if self.state() != "zoomed":
                 self.geometry(f"{self.winfo_width()}x550")
+
+    # ── Actualización automática ──────────────────────────────────────────────
+
+    def _arrancar_check_update(self):
+        """Lanza el check de versión en un hilo de fondo. Solo en producción."""
+        if not getattr(sys, "frozen", False) or not _UPDATE_ENDPOINT:
+            return
+        threading.Thread(target=self._check_update, daemon=True).start()
+
+    def _check_update(self):
+        try:
+            resp = requests.get(_UPDATE_ENDPOINT, timeout=8)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception:
+            return  # sin internet o error del servidor → ignorar silenciosamente
+
+        version_remota = data.get("version", "")
+        download_url   = data.get("download_url", "")
+        if not version_remota or not download_url:
+            return
+
+        local = _ver(_leer_version_local())
+        remota = _ver(version_remota)
+        if remota > local:
+            self._update_info = {"version": version_remota, "download_url": download_url}
+            self.after(0, lambda: self._mostrar_banner_update(version_remota))
+
+    def _mostrar_banner_update(self, version_remota: str):
+        version_local = _leer_version_local()
+        self._banner_label.configure(
+            text=f"Nueva versión disponible: v{version_remota}  (tenés la v{version_local})")
+        self._banner_update.grid()
+
+    def _iniciar_actualizacion(self):
+        if not self._update_info:
+            return
+        self._banner_btn.configure(state="disabled", text="Descargando…")
+        UpdateDialog(self, self._update_info["download_url"])
+
+    # ── Cierre ────────────────────────────────────────────────────────────────
 
     def _on_close(self):
         self._log_file.close()

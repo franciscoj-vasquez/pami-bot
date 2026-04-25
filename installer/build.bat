@@ -67,7 +67,7 @@ if "!ISCC_PATH!"=="" (
         echo ERROR: Inno Setup fallo.
     ) else (
         echo.
-        echo [2/2] OK - Instalador generado en: dist\KINETICA_Instalador_v*.exe
+        echo [2/2] OK - Instalador generado en: dist\KINETICA_setup.exe
     )
 )
 
