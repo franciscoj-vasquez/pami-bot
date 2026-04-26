@@ -1379,14 +1379,26 @@ class App(ctk.CTk):
                 "login_error": "", "finalizado": False,
             }
 
-            proc = subprocess.Popen(
-                _bot_cmd(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env=env,
-                cwd=str(DATA_DIR),
-            )
+            try:
+                proc = subprocess.Popen(
+                    _bot_cmd(),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    env=env,
+                    cwd=str(DATA_DIR),
+                )
+            except Exception as e:
+                def _on_error():
+                    self.btn_ejecutar.configure(state="normal")
+                    self.frame_progreso.grid_remove()
+                    messagebox.showerror(
+                        "Error al iniciar el bot",
+                        f"No se pudo iniciar bot_runner.exe:\n\n{e}\n\n"
+                        "Verificá que la instalación esté completa.",
+                    )
+                self.after(0, _on_error)
+                return
             self._proc = proc
             for linea in proc.stdout:
                 self.after(0, lambda l=linea: self.log_append(l))
