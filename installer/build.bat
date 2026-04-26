@@ -8,6 +8,20 @@ echo   Build KINETICA
 echo ================================================
 echo.
 
+:: Leer y validar version
+if not exist "version.txt" (
+    echo ERROR: No se encontro version.txt en la raiz del proyecto.
+    echo        Crea el archivo con el numero de version, ej: 1.0.0
+    pause & exit /b 1
+)
+set /p APP_VERSION=<version.txt
+if "!APP_VERSION!"=="" (
+    echo ERROR: version.txt esta vacio. Escribi el numero de version, ej: 1.0.0
+    pause & exit /b 1
+)
+echo Version: !APP_VERSION!
+echo.
+
 :: Activar venv
 if not exist "venv\Scripts\activate.bat" (
     echo ERROR: No se encontro el entorno virtual. Ejecuta este script desde la raiz del proyecto.
@@ -58,11 +72,11 @@ if "!ISCC_PATH!"=="" (
     echo NOTA: Inno Setup 6 no encontrado.
     echo   Descargalo desde: https://jrsoftware.org/isdl.php
     echo   Luego ejecuta manualmente:
-    echo     "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\setup.iss
+    echo     "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=!APP_VERSION! installer\setup.iss
     echo.
     echo El ejecutable suelto esta disponible en: dist\KINETICA\KINETICA.exe
 ) else (
-    !ISCC_PATH! installer\setup.iss
+    !ISCC_PATH! /DMyAppVersion=!APP_VERSION! installer\setup.iss
     if errorlevel 1 (
         echo ERROR: Inno Setup fallo.
     ) else (

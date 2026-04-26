@@ -28,15 +28,14 @@ Realizar los cambios necesarios en el código fuente (`src/bot.py`, `src/gui.py`
 
 ## Paso 2 — Actualizar el número de versión
 
-Abrir `installer/setup.iss` y modificar la línea `MyAppVersion`:
+Editar el archivo **`version.txt`** en la raíz del proyecto con el nuevo número:
 
-```ini
-; Antes:
-#define MyAppVersion   "1.0.0"
-
-; Después (ejemplo):
-#define MyAppVersion   "1.1.0"
 ```
+1.1.0
+```
+
+El archivo debe contener únicamente el número de versión, sin espacios ni saltos de línea extra.
+`build.bat` lee este archivo y lo inyecta automáticamente en el instalador.
 
 Seguir el esquema **MAJOR.MINOR.PATCH**:
 
@@ -119,8 +118,8 @@ Se corrige en `src/bot.py` y se distribuye la actualización.
 ```
 1. Editar src/bot.py con la corrección.
 
-2. En installer/setup.iss:
-   #define MyAppVersion   "1.0.1"
+2. En version.txt:
+   1.0.1
 
 3. Ejecutar installer\build.bat
    → genera dist\KINETICA_setup.exe
@@ -144,7 +143,7 @@ Se corrige en `src/bot.py` y se distribuye la actualización.
 ```
 Cambio en el código
        ↓
-Actualizar versión en setup.iss
+Actualizar versión en version.txt
        ↓
 Ejecutar installer\build.bat
        ↓

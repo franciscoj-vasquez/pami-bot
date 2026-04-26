@@ -4,7 +4,11 @@
 ; ============================================================
 
 #define MyAppName      "KINETICA"
-#define MyAppVersion   "1.0.0"
+; Versión inyectada por build.bat vía /DMyAppVersion=X.Y.Z
+; Si compilás manualmente sin build.bat, pasá el flag: /DMyAppVersion="1.0.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "0.0.0"
+#endif
 #define MyAppPublisher "Francisco Vasquez"
 #define MyAppExeName   "KINETICA.exe"
 #define DistDir        "..\dist\KINETICA"
