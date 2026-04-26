@@ -1318,6 +1318,10 @@ class App(ctk.CTk):
         self.progress_bar.set((actual - 1) / total)
         self.progress_label.configure(text=f"Fila {actual} / {total}", text_color="gray60")
 
+    def _update_retry_progress(self, actual, total):
+        self.progress_bar.set((actual - 1) / total)
+        self.progress_label.configure(text=f"Reintentando {actual} / {total}", text_color="#f39c12")
+
     def ejecutar_bot(self):
         if not self.usuario or not self.clave:
             messagebox.showwarning("Aviso", "Configurá las credenciales primero.")
@@ -1407,6 +1411,10 @@ class App(ctk.CTk):
                 if m:
                     actual, total = int(m.group(1)), int(m.group(2))
                     self.after(0, lambda a=actual, t=total: self._update_progress(a, t))
+                m_retry = re.search(r"Reintento (\d+) de (\d+)", linea)
+                if m_retry:
+                    actual, total = int(m_retry.group(1)), int(m_retry.group(2))
+                    self.after(0, lambda a=actual, t=total: self._update_retry_progress(a, t))
                 m_res = re.search(r"Total: \d+ \| OK: (\d+) \| Omitidos: (\d+) \| Detenidos: (\d+) \| Errores: (\d+)", linea)
                 if m_res:
                     resumen["ok"]   = int(m_res.group(1))

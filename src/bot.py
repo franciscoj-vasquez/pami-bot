@@ -32,7 +32,10 @@ import random
 import time
 import re
 import os
+import sys
 import winreg
+
+sys.stdout.reconfigure(line_buffering=True)
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 
@@ -545,12 +548,12 @@ def run(playwright: Playwright) -> None:
                 except Exception as e:
                     print(f"  [AVISO] No se pudo navegar a ambulatorio antes del reintento: {e}. Se omiten reintentos.")
                     a_reintentar = []
-                for res_idx, fila_r in a_reintentar:
+                for retry_idx, (res_idx, fila_r) in enumerate(a_reintentar, 1):
                     if STOP_FLAG.exists():
                         STOP_FLAG.unlink(missing_ok=True)
                         break
                     beneficio_r = fila_r["Beneficio"]
-                    print(f"\n=== [REINTENTO] Beneficio {beneficio_r} ===")
+                    print(f"\n=== Reintento {retry_idx} de {len(a_reintentar)} | Beneficio {beneficio_r} ===")
                     try:
                         nueva_orden(page, fila_r)
                         resultados[res_idx]["estado"] = "PRUEBA" if DRY_RUN else "OK"
