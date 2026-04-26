@@ -514,6 +514,9 @@ def run(playwright: Playwright) -> None:
                 detenido = True
                 STOP_FLAG.unlink(missing_ok=True)
                 break
+            except SesionDuplicada:
+                print(f"  [OMITIDO] Orden ya existente en PAMI — no se reintenta.")
+                resultados.append({"beneficio": beneficio, "estado": "OMITIDO", "motivo": "Orden ya existente en PAMI", "_df_idx": idx, "permanente": True})
             except OrdenError as e:
                 print(f"  [FALLO] {e}")
                 resultados.append({"beneficio": beneficio, "estado": "ERROR", "motivo": str(e), "_df_idx": idx})
@@ -573,7 +576,12 @@ def run(playwright: Playwright) -> None:
         print(sep)
         print(f"Total: {len(resultados)} | OK: {ok} | Omitidos: {omit} | Detenidos: {det} | Errores: {err}")
         if omit:
-            print(f"\n{omit} fila(s) omitidas por fecha futura (procesables cuando llegue su fecha).")
+            omit_futuras   = sum(1 for r in resultados if r["estado"] == "OMITIDO" and "futura" in r["motivo"].lower())
+            omit_duplicadas = sum(1 for r in resultados if r["estado"] == "OMITIDO" and "existente" in r["motivo"].lower())
+            if omit_futuras:
+                print(f"\n{omit_futuras} fila(s) omitidas por fecha futura (procesables cuando llegue su fecha).")
+            if omit_duplicadas:
+                print(f"\n{omit_duplicadas} fila(s) omitidas: la orden ya existía en PAMI antes de esta ejecución.")
         if err:
             print("\nDetalle de errores:")
             for r in resultados:

@@ -8,6 +8,13 @@ echo   Build KINETICA
 echo ================================================
 echo.
 
+:: Verificar que _config.py existe
+if not exist "src\_config.py" (
+    echo ERROR: Falta src\_config.py.
+    echo        Copialo desde src\_config.py.example y completalo con el endpoint real.
+    pause & exit /b 1
+)
+
 :: Leer y validar version
 if not exist "version.txt" (
     echo ERROR: No se encontro version.txt en la raiz del proyecto.
