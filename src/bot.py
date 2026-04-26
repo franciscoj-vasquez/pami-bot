@@ -117,6 +117,11 @@ def check_stop():
 def leer_pacientes():
     df = pd.read_excel(EXCEL_PATH, dtype=str)
     df.columns = df.columns.str.strip()
+    faltantes = {"Beneficio", "Parentesco", "Fecha", "Cod_Diagnostico"} - set(df.columns)
+    if faltantes:
+        raise ValueError(f"Columnas faltantes en el Excel: {', '.join(sorted(faltantes))}")
+    if not any(c.startswith("Cod_Practica") for c in df.columns):
+        raise ValueError("No se encontró ninguna columna 'Cod_Practica' en el Excel.")
     df = df[df["Beneficio"].notna() & (df["Beneficio"].str.strip() != "")]
     return df.reset_index(drop=True)
 

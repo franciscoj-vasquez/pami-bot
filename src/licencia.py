@@ -34,7 +34,7 @@ except ImportError:
     _ENDPOINT = ""
 
 # ── Parámetros ────────────────────────────────────────────────────────────────
-CACHE_TTL_DAYS     = 1   # horas antes de re-validar online (1 día)
+CACHE_TTL_DAYS     = 1   # días antes de re-validar online
 OFFLINE_GRACE_DAYS = 7   # días sin internet antes de bloquear
 
 _KEY_RE   = re.compile(r"^KINE-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$")

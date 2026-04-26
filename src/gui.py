@@ -954,13 +954,13 @@ class UpdateDialog(ctk.CTkToplevel):
 # ── Actualización automática ──────────────────────────────────────────────────
 
 def _leer_version_local() -> str:
-    """Lee la versión instalada desde version.txt (junto al .exe). En dev devuelve '0.0.0'."""
+    """Lee la versión instalada desde version.txt (junto al .exe). Devuelve '' si no disponible."""
     if not getattr(sys, "frozen", False):
-        return "0.0.0"
+        return ""
     try:
         return (Path(sys.executable).parent / "version.txt").read_text(encoding="utf-8").strip()
     except OSError:
-        return "0.0.0"
+        return ""
 
 def _ver(v: str) -> tuple:
     try:
@@ -1546,7 +1546,10 @@ class App(ctk.CTk):
         if not version_remota or not download_url:
             return
 
-        local = _ver(_leer_version_local())
+        version_local = _leer_version_local()
+        if not version_local:
+            return
+        local  = _ver(version_local)
         remota = _ver(version_remota)
         if remota > local:
             self._update_info = {"version": version_remota, "download_url": download_url}
