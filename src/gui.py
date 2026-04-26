@@ -1566,6 +1566,11 @@ class App(ctk.CTk):
     # ── Cierre ────────────────────────────────────────────────────────────────
 
     def _on_close(self):
+        if self._proc is not None:
+            try:
+                self._proc.terminate()
+            except Exception:
+                pass
         self._log_file.close()
         self.destroy()
 
@@ -1601,6 +1606,8 @@ class App(ctk.CTk):
         self.log.configure(state="disabled")
 
     def log_append(self, texto):
+        if not self.winfo_exists():
+            return
         self._log_lines.append(texto)
         self._log_file.write(texto)
         if self._solo_errores_var.get() and not any(k in texto for k in LOG_ERROR_KEYWORDS):
