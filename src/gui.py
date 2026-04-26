@@ -1599,11 +1599,27 @@ class App(ctk.CTk):
         if not STOP_FLAG.exists():
             # Primer clic: parada cooperativa — el bot termina el paso actual y genera el reporte
             STOP_FLAG.write_text("")
-            self.btn_detener.configure(text="Forzar cierre")
+            self.btn_detener.configure(
+                text="Forzar cierre",
+                fg_color="#e67e22", hover_color="#d35400",
+            )
+            self.progress_label.configure(
+                text="Deteniendo — terminando orden actual y generando informe…",
+                text_color="#e67e22",
+            )
         else:
-            # Segundo clic: bot colgado — matar el proceso (sin reporte)
+            # Segundo clic: advertir que no habrá informe y confirmar
+            confirmar = messagebox.askokcancel(
+                "Forzar cierre",
+                "¿Seguro que querés forzar el cierre?\n\n"
+                "El bot se terminará inmediatamente y no se generará el informe de resultados.",
+                icon="warning",
+            )
+            if not confirmar:
+                return
             self._bot_forzado = True
-            self.btn_detener.configure(state="disabled", text="Cerrando...")
+            self.btn_detener.configure(state="disabled", text="Cerrando…")
+            self.progress_label.configure(text="Forzando cierre…", text_color="#e74c3c")
             if self._proc is not None:
                 self._proc.terminate()
 
