@@ -935,7 +935,10 @@ class UpdateDialog(ctk.CTkToplevel):
 
     def _esperar_instalador(self, proc):
         proc.wait()
-        self.after(0, self._parent.destroy)
+        try:
+            self.after(0, self._parent.destroy)
+        except Exception:
+            pass
 
     def _error(self, msg: str):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
@@ -1314,6 +1317,12 @@ class App(ctk.CTk):
         self.log_append(msg)
         messagebox.showinfo("Listo", "pacientes.xlsx generado correctamente.")
 
+    def _habilitar_btn_ejecutar(self):
+        if self._excel_activo and self._excel_activo.exists():
+            self.btn_ejecutar.configure(state="normal", fg_color="#27ae60", hover_color="#1e8449")
+        else:
+            self.btn_ejecutar.configure(state="normal", fg_color="#4a4a4a", hover_color="#4a4a4a")
+
     def _update_progress(self, actual, total):
         self.progress_bar.set((actual - 1) / total)
         self.progress_label.configure(text=f"Fila {actual} / {total}", text_color="gray60")
@@ -1346,7 +1355,7 @@ class App(ctk.CTk):
         if self._hide_after_id is not None:
             self.frame_progreso.after_cancel(self._hide_after_id)
             self._hide_after_id = None
-        self.btn_ejecutar.configure(state="disabled")
+        self.btn_ejecutar.configure(state="disabled", fg_color="#4a4a4a", hover_color="#4a4a4a")
         self.btn_detener.configure(state="normal", text="Detener")
         self.btn_detener.grid(row=0, column=1, padx=(10, 0))
         self.frame_progreso.grid(row=9, column=0, sticky="ew", padx=20, pady=(4, 2))
@@ -1395,7 +1404,7 @@ class App(ctk.CTk):
                 )
             except Exception as e:
                 def _on_error():
-                    self.btn_ejecutar.configure(state="normal")
+                    self._habilitar_btn_ejecutar()
                     self.frame_progreso.grid_remove()
                     messagebox.showerror(
                         "Error al iniciar el bot",
@@ -1445,7 +1454,7 @@ class App(ctk.CTk):
                 if resumen["login_error"]:
                     self.progress_label.configure(text="Error de credenciales", text_color="#e74c3c")
                     self.log_append("Bot finalizado con error de credenciales.\n")
-                    self.btn_ejecutar.configure(state="normal")
+                    self._habilitar_btn_ejecutar()
                     messagebox.showerror(
                         "Error de autenticación",
                         f"{resumen['login_error']}\n\nVerificá las credenciales en Configuración.",
@@ -1455,7 +1464,7 @@ class App(ctk.CTk):
                 if not resumen["finalizado"] and not self._bot_forzado:
                     self.progress_label.configure(text="Error inesperado — revisá el log", text_color="#e74c3c")
                     self.log_append("Bot finalizado con error inesperado.\n")
-                    self.btn_ejecutar.configure(state="normal")
+                    self._habilitar_btn_ejecutar()
                     messagebox.showerror(
                         "Error inesperado",
                         "El bot terminó de forma inesperada sin procesar órdenes.\n\n"
@@ -1506,7 +1515,7 @@ class App(ctk.CTk):
                             f"Revisá el reporte en:\n{resumen['reporte']}"
                         )
                 self.log_append("Bot finalizado.\n")
-                self.btn_ejecutar.configure(state="normal")
+                self._habilitar_btn_ejecutar()
 
             self.after(0, _mostrar_resultado)
 
