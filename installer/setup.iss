@@ -66,8 +66,14 @@ Filename: "{app}\{#MyAppExeName}"; \
 [Code]
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if CurStep = ssPostInstall then
+  if CurStep = ssPostInstall then begin
     SaveStringToFile(ExpandConstant('{app}\version.txt'), '{#MyAppVersion}', False);
+    if not DirExists(ExpandConstant('{localappdata}\ms-playwright')) then
+      MsgBox(
+        'Advertencia: no se pudo descargar el navegador.' + #13#10 +
+        'Verificá tu conexión a internet y reinstalá la aplicación.',
+        mbError, MB_OK);
+  end;
 end;
 
 [UninstallDelete]

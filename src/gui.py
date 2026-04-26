@@ -985,6 +985,7 @@ class App(ctk.CTk):
         self._excel_activo  = cargar_excel_activo()
         self._proc          = None
         self._hide_after_id = None
+        self._bot_forzado   = False
         self._log_lines:    deque[str] = deque(maxlen=10_000)
         self._log_visible   = False
         self._log_file      = open(DATA_DIR / "bot.log", "a", encoding="utf-8", buffering=1)
