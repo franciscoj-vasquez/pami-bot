@@ -19,6 +19,7 @@ import queue as _queue
 import requests
 
 import licencia as _lic
+import verificacion as _verif
 
 try:
     from _config import LICENSE_ENDPOINT as _UPDATE_ENDPOINT
@@ -486,7 +487,7 @@ class PacienteDialog(ctk.CTkToplevel):
 
         es_edicion = idx is not None
         self.title("Editar Paciente" if es_edicion else "Agregar Paciente")
-        self.geometry("420x440")
+        self.geometry("420x495")
         self.resizable(False, True)
         self.grab_set()
 
@@ -534,10 +535,27 @@ class PacienteDialog(ctk.CTkToplevel):
             setattr(self, attr, widget)
 
         n = len(campos)
+
+        # ── Verificación rápida de afiliado ───────────────────────────────────
+        verif_frame = ctk.CTkFrame(self, fg_color="transparent")
+        verif_frame.grid(row=n, column=0, columnspan=2, padx=20, pady=(8, 0), sticky="ew")
+        self._btn_verificar_afiliado = ctk.CTkButton(
+            verif_frame, text="🔍 Verificar afiliado", width=160,
+            fg_color="transparent", border_width=1, hover_color="#333",
+            font=ctk.CTkFont(size=12),
+            command=self._verificar_afiliado,
+        )
+        self._btn_verificar_afiliado.pack(side="left")
+        self._lbl_verif_afiliado = ctk.CTkLabel(
+            verif_frame, text="", text_color="gray55", anchor="w",
+            wraplength=220, font=ctk.CTkFont(size=11),
+        )
+        self._lbl_verif_afiliado.pack(side="left", padx=(10, 0))
+
         ctk.CTkLabel(self, text="Códigos de práctica:", anchor="w", width=200).grid(
-            row=n, column=0, padx=(20,5), pady=(12,0), sticky="nw")
+            row=n+1, column=0, padx=(20,5), pady=(12,0), sticky="nw")
         self.practicas_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.practicas_frame.grid(row=n, column=1, padx=(0,20), pady=(12,0), sticky="w")
+        self.practicas_frame.grid(row=n+1, column=1, padx=(0,20), pady=(12,0), sticky="w")
 
         self.btn_agregar_cod = ctk.CTkButton(
             self.practicas_frame, text="+ Agregar código", width=145,
@@ -549,7 +567,7 @@ class PacienteDialog(ctk.CTkToplevel):
 
         label_btn = "Guardar" if es_edicion else "Agregar"
         ctk.CTkButton(self, text=label_btn, command=self._guardar, width=160).grid(
-            row=n+1, column=0, columnspan=2, pady=16)
+            row=n+2, column=0, columnspan=2, pady=16)
 
     def _agregar_entrada_practica(self, cod=""):
         fila = ctk.CTkFrame(self.practicas_frame, fg_color="transparent")
@@ -565,6 +583,72 @@ class PacienteDialog(ctk.CTkToplevel):
     def _quitar_practica(self, ref):
         ref[0].destroy()
         self._practica_rows.remove(ref)
+
+    def _verificar_afiliado(self):
+        beneficio  = self.entry_beneficio.get().strip()
+        parentesco = self.entry_parentesco.get().strip()
+
+        if not beneficio or not parentesco:
+            self._lbl_verif_afiliado.configure(
+                text="Completá beneficio y parentesco antes de verificar.",
+                text_color="gray55",
+            )
+            return
+
+        if not self.parent.usuario or not self.parent.clave:
+            self._lbl_verif_afiliado.configure(
+                text="⚠ Ingresá las credenciales PAMI primero.",
+                text_color="#e67e22",
+            )
+            return
+
+        self._btn_verificar_afiliado.configure(state="disabled")
+        self._lbl_verif_afiliado.configure(text="⟳ Verificando…", text_color="gray55")
+
+        q: _queue.Queue = _queue.Queue()
+
+        def worker():
+            try:
+                resultados = _verif.verificar_afiliados_batch(
+                    self.parent.usuario,
+                    self.parent.clave,
+                    [{"beneficio": beneficio, "parentesco": parentesco}],
+                )
+                q.put(("ok", resultados[0] if resultados else None))
+            except _verif.LoginError as e:
+                q.put(("login_error", str(e)))
+            except Exception as e:
+                q.put(("error", str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        def poll():
+            try:
+                tipo, data = q.get_nowait()
+            except _queue.Empty:
+                if self.winfo_exists():
+                    self.after(100, poll)
+                return
+
+            if not self.winfo_exists():
+                return
+
+            self._btn_verificar_afiliado.configure(state="normal")
+            if tipo == "ok" and data and data.encontrado:
+                self._lbl_verif_afiliado.configure(
+                    text=f"✓  {data.nombre}", text_color="#27ae60"
+                )
+            elif tipo == "ok":
+                msg = data.error if data else "No encontrado en PAMI"
+                self._lbl_verif_afiliado.configure(
+                    text=f"✗  {msg}", text_color="#e74c3c"
+                )
+            else:
+                self._lbl_verif_afiliado.configure(
+                    text=f"✗  {data}", text_color="#e74c3c"
+                )
+
+        self.after(100, poll)
 
     def _guardar(self):
         beneficio   = self.entry_beneficio.get().strip()
@@ -663,6 +747,170 @@ class FechasFuturasDialog(ctk.CTkToplevel):
     def _confirmar(self):
         self.destroy()
         self._on_confirm()
+
+# ── Diálogo: Verificación de Afiliados ───────────────────────────────────────
+
+class VerificacionBatchDialog(ctk.CTkToplevel):
+    """
+    Verifica el nombre de todos los afiliados cargados en una única sesión PAMI.
+
+    Flujo: login → ambulatorio → ALTA → [búsqueda × N] → cancelar → cerrar.
+    El overhead de login y navegación se paga una sola vez para toda la lista.
+    """
+
+    _COL_BENEFICIO  = 130
+    _COL_PARENTESCO = 80
+    _COL_RESULTADO  = 290
+
+    def __init__(self, parent, pacientes: list, usuario: str, clave: str):
+        super().__init__(parent)
+        self.title("Verificar Afiliados")
+        self.geometry("560x420")
+        self.resizable(False, True)
+        self.minsize(560, 300)
+        self.grab_set()
+
+        self._pacientes             = pacientes
+        self._usuario               = usuario
+        self._clave                 = clave
+        self._queue: _queue.Queue   = _queue.Queue()
+        self._stop                  = threading.Event()
+        self._done                  = False
+        self._row_labels: list      = []  # ctk.CTkLabel por cada paciente (orden == self._pacientes)
+
+        self._build_ui()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._start()
+
+    def _build_ui(self):
+        # ── Estado y barra de progreso ─────────────────────────────────────────
+        self._lbl_estado = ctk.CTkLabel(
+            self, text="Conectando a PAMI…",
+            font=ctk.CTkFont(size=13), anchor="center",
+        )
+        self._lbl_estado.pack(pady=(18, 6))
+
+        self._bar = ctk.CTkProgressBar(self, mode="indeterminate", width=460)
+        self._bar.pack(pady=(0, 12))
+        self._bar.start()
+
+        # ── Encabezados de tabla ───────────────────────────────────────────────
+        hdr = ctk.CTkFrame(self, fg_color="transparent")
+        hdr.pack(fill="x", padx=24, pady=(0, 2))
+        for text, width in [
+            ("Beneficio",  self._COL_BENEFICIO),
+            ("Parentesco", self._COL_PARENTESCO),
+            ("Resultado",  self._COL_RESULTADO),
+        ]:
+            ctk.CTkLabel(
+                hdr, text=text, width=width, anchor="w",
+                font=ctk.CTkFont(weight="bold"),
+            ).pack(side="left")
+
+        # ── Filas de resultados (estado inicial: pendiente) ────────────────────
+        self._lista = ctk.CTkScrollableFrame(self, height=220)
+        self._lista.pack(fill="both", expand=True, padx=20, pady=(0, 8))
+
+        for p in self._pacientes:
+            fila = ctk.CTkFrame(self._lista, fg_color="transparent")
+            fila.pack(fill="x", pady=2)
+            ctk.CTkLabel(
+                fila, text=str(p["beneficio"]),
+                width=self._COL_BENEFICIO, anchor="w",
+            ).pack(side="left")
+            ctk.CTkLabel(
+                fila, text=str(p["parentesco"]),
+                width=self._COL_PARENTESCO, anchor="w",
+            ).pack(side="left")
+            lbl_res = ctk.CTkLabel(
+                fila, text="—", text_color="gray55",
+                width=self._COL_RESULTADO, anchor="w",
+                wraplength=self._COL_RESULTADO - 4,
+                font=ctk.CTkFont(size=12),
+            )
+            lbl_res.pack(side="left")
+            self._row_labels.append(lbl_res)
+
+        # ── Botón cerrar ───────────────────────────────────────────────────────
+        self._btn_cerrar = ctk.CTkButton(
+            self, text="Cerrar", width=120,
+            state="disabled", command=self.destroy,
+        )
+        self._btn_cerrar.pack(pady=(4, 16))
+
+    def _start(self):
+        threading.Thread(target=self._worker, daemon=True).start()
+        self.after(100, self._poll)
+
+    def _worker(self):
+        try:
+            _verif.verificar_afiliados_batch(
+                self._usuario,
+                self._clave,
+                self._pacientes,
+                on_progress=self._on_progress,
+                stop=self._stop,
+            )
+            self._queue.put({"type": "done"})
+        except _verif.LoginError as e:
+            self._queue.put({"type": "fatal", "msg": str(e)})
+        except Exception as e:
+            self._queue.put({"type": "fatal", "msg": f"Error inesperado: {e}"})
+
+    def _on_progress(self, idx: int, total: int, resultado):
+        self._queue.put({"type": "progress", "idx": idx, "total": total, "r": resultado})
+
+    def _poll(self):
+        if not self.winfo_exists():
+            return
+        try:
+            while True:
+                msg = self._queue.get_nowait()
+                self._handle_msg(msg)
+        except _queue.Empty:
+            pass
+        if not self._done:
+            self.after(100, self._poll)
+
+    def _handle_msg(self, msg: dict):
+        tipo = msg["type"]
+        if tipo == "progress":
+            idx, total, r = msg["idx"], msg["total"], msg["r"]
+            self._lbl_estado.configure(
+                text=f"Verificando afiliado {idx + 1} de {total}…",
+                text_color="gray80",
+            )
+            lbl = self._row_labels[idx] if idx < len(self._row_labels) else None
+            if lbl and lbl.winfo_exists():
+                if r.encontrado:
+                    lbl.configure(text=f"✓  {r.nombre}", text_color="#27ae60")
+                else:
+                    lbl.configure(
+                        text=f"✗  {r.error or 'No encontrado en PAMI'}",
+                        text_color="#e74c3c",
+                    )
+        elif tipo == "done":
+            self._finalizar(ok=True)
+        elif tipo == "fatal":
+            self._lbl_estado.configure(text=f"✗  {msg['msg']}", text_color="#e74c3c")
+            self._finalizar(ok=False)
+
+    def _finalizar(self, ok: bool):
+        self._done = True
+        self._bar.stop()
+        self._bar.pack_forget()
+        if ok:
+            n = len(self._pacientes)
+            self._lbl_estado.configure(
+                text=f"Verificación completada — {n} afiliado(s) consultado(s).",
+                text_color="#27ae60",
+            )
+        self._btn_cerrar.configure(state="normal")
+
+    def _on_close(self):
+        self._stop.set()
+        self.destroy()
+
 
 # ── Diálogo: Activación de Licencia ──────────────────────────────────────────
 
@@ -1065,6 +1313,8 @@ class App(ctk.CTk):
                       command=self.abrir_agregar_paciente).pack(side="left", padx=8)
         ctk.CTkButton(frame_tabla_btns, text="Generar Excel",
                       command=self.generar_excel).pack(side="left", padx=8)
+        ctk.CTkButton(frame_tabla_btns, text="🔍 Verificar afiliados",
+                      command=self.abrir_verificacion).pack(side="left", padx=8)
 
         # ── Excel a procesar
         frame_excel = ctk.CTkFrame(self, fg_color="transparent")
@@ -1246,6 +1496,23 @@ class App(ctk.CTk):
 
     def abrir_credenciales(self):
         CredencialesDialog(self)
+
+    def abrir_verificacion(self):
+        if not self.pacientes:
+            messagebox.showinfo(
+                "Sin pacientes",
+                "No hay pacientes cargados para verificar.",
+                parent=self,
+            )
+            return
+        if not self.usuario or not self.clave:
+            messagebox.showwarning(
+                "Sin credenciales",
+                "Ingresá las credenciales PAMI antes de verificar.",
+                parent=self,
+            )
+            return
+        VerificacionBatchDialog(self, self.pacientes, self.usuario, self.clave)
 
     def abrir_feriados(self):
         FeriadosDialog(self)
