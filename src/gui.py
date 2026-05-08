@@ -521,8 +521,9 @@ class PacienteDialog(ctk.CTkToplevel):
         ]
 
         for i, (label, attr, default, tipo) in enumerate(campos):
+            row = i if i < 2 else i + 1  # row 2 reservada para el botón de verificación
             ctk.CTkLabel(self, text=label, anchor="w", width=200).grid(
-                row=i, column=0, padx=(20,5), pady=(12,0), sticky="w")
+                row=row, column=0, padx=(20,5), pady=(12,0), sticky="w")
             if tipo == "parentesco":
                 widget = ParentescoWidget(self, default=default)
             elif tipo == "date":
@@ -531,14 +532,14 @@ class PacienteDialog(ctk.CTkToplevel):
             else:
                 widget = ctk.CTkEntry(self, width=160)
                 widget.insert(0, default)
-            widget.grid(row=i, column=1, padx=(0,20), pady=(12,0), sticky="w")
+            widget.grid(row=row, column=1, padx=(0,20), pady=(12,0), sticky="w")
             setattr(self, attr, widget)
 
         n = len(campos)
 
         # ── Verificación rápida de afiliado ───────────────────────────────────
         verif_frame = ctk.CTkFrame(self, fg_color="transparent")
-        verif_frame.grid(row=n, column=0, columnspan=2, padx=20, pady=(8, 0), sticky="ew")
+        verif_frame.grid(row=2, column=0, columnspan=2, padx=20, pady=(4, 0), sticky="ew")
         self._btn_verificar_afiliado = ctk.CTkButton(
             verif_frame, text="🔍 Verificar afiliado", width=160,
             fg_color="transparent", border_width=1, hover_color="#333",
