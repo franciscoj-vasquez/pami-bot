@@ -90,10 +90,21 @@ def _login(page, usuario: str, clave: str) -> None:
 
 def _abrir_formulario_alta(page) -> None:
     page.goto(_URL_AMBULATORIO)
-    page.wait_for_selector("text=ALTA", timeout=15000)
+    try:
+        page.wait_for_selector("text=ALTA", timeout=15000)
+    except PWTimeout:
+        raise VerificacionError(
+            "La página de ambulatorio no cargó. "
+            "Verificá tu conexión y el estado del sitio PAMI."
+        )
     _pausa()
     page.locator("text=ALTA").first.click()
-    page.wait_for_selector("#zk_comp_130-btn", state="visible", timeout=20000)
+    try:
+        page.wait_for_selector("#zk_comp_130-btn", state="visible", timeout=20000)
+    except PWTimeout:
+        raise VerificacionError(
+            "El formulario de alta no se abrió. La página PAMI puede estar lenta."
+        )
     _pausa()
 
 
@@ -132,6 +143,10 @@ def _consultar_nombre(
     try:
         popup.wait_for(state="visible", timeout=10000)
     except PWTimeout:
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
         raise VerificacionError("El panel de búsqueda de afiliado no respondió.")
     _pausa()
 
@@ -168,7 +183,7 @@ def _consultar_nombre(
         raise VerificacionError("El dropdown de parentesco no se abrió.")
 
     items_par = dropdown.locator(
-        ".z-comboitem-text", has_text=re.compile(rf"^{cod_par}")
+        ".z-comboitem-text", has_text=re.compile(rf"^{re.escape(cod_par)}")
     )
     if items_par.count() == 0:
         page.keyboard.press("Escape")
@@ -192,13 +207,9 @@ def _consultar_nombre(
         _pausa_corta()
         return None
 
-    # Leer todas las celdas del primer resultado y combinarlas
-    cells = primer_item.locator(".z-listcell")
-    nombre = "  |  ".join(
-        cells.nth(i).inner_text().strip()
-        for i in range(cells.count())
-        if cells.nth(i).inner_text().strip()
-    )
+    # Leer todas las celdas del primer resultado en una sola llamada
+    textos = primer_item.locator(".z-listcell").all_inner_texts()
+    nombre = "  |  ".join(t.strip() for t in textos if t.strip())
 
     page.keyboard.press("Escape")
     _pausa_corta()
@@ -240,10 +251,11 @@ def verificar_afiliados_batch(
     resultados: list[ResultadoAfiliado] = []
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True, slow_mo=_SLOW_MO)
-        page    = browser.new_context().new_page()
-
+        browser = None
         try:
+            browser = pw.chromium.launch(headless=True, slow_mo=_SLOW_MO)
+            page    = browser.new_context().new_page()
+
             _login(page, usuario, clave)
 
             if stop.is_set():
@@ -267,6 +279,14 @@ def verificar_afiliados_batch(
                         resultado.error = "No encontrado en PAMI"
                 except VerificacionError as e:
                     resultado.error = str(e)
+                    # Seguridad: asegurar que el popup esté cerrado antes del siguiente paciente.
+                    # _consultar_nombre ya intenta Escape en cada rama de error, pero ante
+                    # cualquier estado inesperado del DOM esta segunda pasada es inocua.
+                    try:
+                        page.keyboard.press("Escape")
+                        _pausa_corta()
+                    except Exception:
+                        pass
 
                 resultados.append(resultado)
                 if on_progress:
@@ -276,6 +296,7 @@ def verificar_afiliados_batch(
                 _cancelar_alta(page)
 
         finally:
-            browser.close()
+            if browser:
+                browser.close()
 
     return resultados

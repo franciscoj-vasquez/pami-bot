@@ -490,6 +490,8 @@ class PacienteDialog(ctk.CTkToplevel):
         self.geometry("420x495")
         self.resizable(False, True)
         self.grab_set()
+        self._verif_stop = threading.Event()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         hoy = datetime.today().strftime("%d/%m/%Y")
         if es_edicion:
@@ -585,6 +587,10 @@ class PacienteDialog(ctk.CTkToplevel):
         ref[0].destroy()
         self._practica_rows.remove(ref)
 
+    def _on_close(self):
+        self._verif_stop.set()
+        self.destroy()
+
     def _verificar_afiliado(self):
         beneficio  = self.entry_beneficio.get().strip()
         parentesco = self.entry_parentesco.get().strip()
@@ -603,6 +609,7 @@ class PacienteDialog(ctk.CTkToplevel):
             )
             return
 
+        self._verif_stop = threading.Event()  # señal fresca para esta verificación
         self._btn_verificar_afiliado.configure(state="disabled")
         self._lbl_verif_afiliado.configure(text="⟳ Verificando…", text_color="gray55")
 
@@ -614,6 +621,7 @@ class PacienteDialog(ctk.CTkToplevel):
                     self.parent.usuario,
                     self.parent.clave,
                     [{"beneficio": beneficio, "parentesco": parentesco}],
+                    stop=self._verif_stop,
                 )
                 q.put(("ok", resultados[0] if resultados else None))
             except _verif.LoginError as e:
@@ -771,7 +779,7 @@ class VerificacionBatchDialog(ctk.CTkToplevel):
         self.minsize(560, 300)
         self.grab_set()
 
-        self._pacientes             = pacientes
+        self._pacientes             = list(pacientes)  # snapshot: evita desincronía si la lista cambia durante la verificación
         self._usuario               = usuario
         self._clave                 = clave
         self._queue: _queue.Queue   = _queue.Queue()
@@ -1510,6 +1518,14 @@ class App(ctk.CTk):
             messagebox.showwarning(
                 "Sin credenciales",
                 "Ingresá las credenciales PAMI antes de verificar.",
+                parent=self,
+            )
+            return
+        if self._proc is not None:
+            messagebox.showwarning(
+                "Bot en ejecución",
+                "El bot está procesando órdenes.\n"
+                "Esperá a que termine antes de verificar afiliados.",
                 parent=self,
             )
             return
