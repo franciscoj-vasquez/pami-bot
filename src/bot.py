@@ -257,13 +257,13 @@ def cargar_fecha(page, fecha_str):
 
 def cargar_profesional(page):
     print("  Profesional actuante...")
-    page.locator("#zk_comp_380-btn").click()
+    page.locator("#zk_comp_381-btn").click()
     try:
-        page.locator("#zk_comp_382").wait_for(state="visible", timeout=8000)
+        page.locator("#zk_comp_383").wait_for(state="visible", timeout=8000)
     except PWTimeout:
         raise OrdenError("El panel de selección de profesional no respondió.")
     pausa_corta()
-    page.locator("#zk_comp_382").click()
+    page.locator("#zk_comp_383").click()
     pausa_corta()
 
 # ── Diagnóstico ───────────────────────────────────────────────────────────────
